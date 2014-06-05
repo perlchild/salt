@@ -1,0 +1,12 @@
+image: perlchild/buildsalt
+env:
+  - GOPATH=/var/cache/drone
+script:
+  - make
+  - make test
+services:
+  - salt-minion
+notify:
+  email:
+    recipients:
+      - eric.robibaro@radialpoint.com
