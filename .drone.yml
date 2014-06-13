@@ -1,4 +1,4 @@
-image: centos
+image: perlchild/buildredis
 env:
   - GOPATH=/var/cache/drone
 script:
