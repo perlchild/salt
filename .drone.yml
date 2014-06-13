@@ -1,4 +1,4 @@
-image: perlchild/buildsalt
+image: centos
 env:
   - GOPATH=/var/cache/drone
 script:
