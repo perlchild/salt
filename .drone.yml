@@ -2,8 +2,7 @@ image: perlchild/buildsalt
 env:
   - GOPATH=/var/cache/drone
 script:
-  - make
-  - make test
+  - python setup.py bdist_rpm
 services:
   - salt-minion
 notify:
