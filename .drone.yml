@@ -3,8 +3,6 @@ env:
   - GOPATH=/var/cache/drone
 script:
   - python setup.py bdist_rpm
-services:
-  - salt-minion
 notify:
   email:
     recipients:
