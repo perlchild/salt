@@ -65,6 +65,20 @@ config:
               - binlog_checksum: CRC32
             - region: eu-west-1
 
+
+.. code-block:: yaml
+
+    Ensure option group exists:
+        create-option-group:
+          boto_rds.option_group_present:
+            - name: myoptiongroup
+            - db_engine: oracle-se2
+            - db_major_engine_version: oracle-se2
+            - description: "parameter group family"
+            - options:
+              - APEX: {'version': 1.0}
+              - OEM: {'Port': 5500}
+
 :depends: boto3
 
 '''
@@ -88,7 +102,7 @@ def __virtual__():
     '''
     if 'boto_rds.exists' in __salt__:
         return 'boto_rds'
-    return(False, __salt__.missing_fun_string('boto_rds.exists'))
+    return (False, __salt__.missing_fun_string('boto_rds.exists'))
 
 
 def present(name,
@@ -352,9 +366,9 @@ def present(name,
 
         ret['changes']['old'] = {'instance': None}
         ret['changes']['new'] = {
-              'instance': __salt__['boto_rds.describe_db_instances'](
-              name=name, jmespath='DBInstances[0]', region=region, key=key,
-              keyid=keyid, profile=profile)}
+            'instance': __salt__['boto_rds.describe_db_instances'](
+                name=name, jmespath='DBInstances[0]', region=region, key=key,
+                keyid=keyid, profile=profile)}
         ret['comment'] = 'RDS instance {0} created.'.format(name)
     else:
         ret['comment'] = 'RDS instance {0} exists.'.format(name)
@@ -401,22 +415,22 @@ def replica_present(name, source, db_instance_class=None,
             ret['comment'] = 'RDS replica {0} created.'.format(name)
             ret['changes']['old'] = {'instance': None}
             ret['changes']['new'] = {
-                  'instance': __salt__['boto_rds.describe_db_instances'](
-                  name=name, jmespath='DBInstances[0]', region=region,
-                  key=key, keyid=keyid, profile=profile)}
+                'instance': __salt__['boto_rds.describe_db_instances'](
+                    name=name, jmespath='DBInstances[0]', region=region,
+                    key=key, keyid=keyid, profile=profile)}
         else:
             ret['result'] = False
             ret['comment'] = 'Failed to create RDS replica {0}.'.format(name)
     else:
         jmespath = 'DBInstances[0].DBParameterGroups[0].DBParameterGroupName'
         pmg_name = __salt__['boto_rds.describe_db_instances'](name=name,
-              jmespath=jmespath, region=region, key=key, keyid=keyid,
-              profile=profile)
+                                                              jmespath=jmespath, region=region, key=key, keyid=keyid,
+                                                              profile=profile)
         pmg_name = pmg_name[0] if pmg_name else None
         if pmg_name != db_parameter_group_name:
             modified = __salt__['boto_rds.modify_db_instance'](
-                  name=name, db_parameter_group_name=db_parameter_group_name,
-                  region=region, key=key, keyid=keyid, profile=profile)
+                name=name, db_parameter_group_name=db_parameter_group_name,
+                region=region, key=key, keyid=keyid, profile=profile)
             if not modified:
                 ret['result'] = False
                 ret['comment'] = ('Failed to update parameter group of {0} RDS '
@@ -571,7 +585,7 @@ def absent(name, skip_final_snapshot=None, final_db_snapshot_identifier=None,
            }
 
     current = __salt__['boto_rds.describe_db_instances'](
-            name=name, region=region, key=key, keyid=keyid, profile=profile)
+        name=name, region=region, key=key, keyid=keyid, profile=profile)
     if not current:
         ret['result'] = True
         ret['comment'] = '{0} RDS already absent.'.format(name)
@@ -622,6 +636,185 @@ def subnet_group_absent(name, tags=None, region=None, key=None, keyid=None, prof
     ret['changes']['new'] = None
     ret['comment'] = 'RDS subnet group {0} deleted.'.format(name)
     return ret
+
+
+def option_group_present(name, db_engine, db_major_engine_version, description=None, options=None,
+                         tags=None, region=None, key=None, keyid=None, profile=None):
+    '''
+        name
+            The name of your option group
+
+        db_engine
+            The applicable database engine for this option group
+            
+        db_major_engine_version
+            What major version of the db engine is applicable
+            
+        description
+            Some human readable text about this option group
+            
+        options
+            a dict of options containing dicts of the various options an option can configure/enable
+            
+        Disclaimer most rds options only make sense with large rds instances, and testing and development budget
+        is by nature limited, with rds being able to add new ones as new versions of each engine is available
+
+
+
+          Options -> (list)
+              Indicates what options are available in the option group.
+
+              (structure)
+                 Option details.
+
+                 OptionName -> (string)
+                     The name of the option.
+
+                 OptionDescription -> (string)
+                     The description of the option.
+
+                 Persistent -> (boolean)
+                     Indicate if this option is persistent.
+
+                 Permanent -> (boolean)
+                     Indicate if this option is permanent.
+
+                 Port -> (integer)
+                     If required, the port configured for this option to use.
+
+                 OptionVersion -> (string)
+                     The version of the option.
+
+                 OptionSettings -> (list)
+                     The option settings for this option.
+
+                     (structure)
+                        Option  settings are the actual settings being applied
+                        or configured for that option. It  is  used  when  you
+                        modify  an option group or describe option groups. For
+                        example, the NATIVE_NETWORK_ENCRYPTION  option  has  a
+                        setting  called SQLNET.ENCRYPTION_SERVER that can have
+                        several different values.
+
+                        Name -> (string)
+                            The name of the option that has settings that  you
+                            can set.
+
+                        Value -> (string)
+                            The current value of the option setting.
+
+                        DefaultValue -> (string)
+                            The default value of the option setting.
+
+                        Description -> (string)
+                            The description of the option setting.
+
+                        ApplyType -> (string)
+                            The DB engine specific parameter type.
+
+                        DataType -> (string)
+                            The data type of the option setting.
+
+                        AllowedValues -> (string)
+                            The allowed values of the option setting.
+
+                        IsModifiable -> (boolean)
+                            A  apply-immediately  value that, when true, indi-
+                            cates the option setting can be modified from  the
+                            default.
+
+                        IsCollection -> (boolean)
+                            Indicates  if the option setting is part of a col-
+                            lection.
+
+                 DBSecurityGroupMemberships -> (list)
+                     If the option requires access to a  port,  then  this  DB
+                     security group allows access to the port.
+
+                     (structure)
+                        This  data  type  is used as a response element in the
+                        following actions:
+
+                        o modify-db-instance
+
+                        o reboot-db-instance
+
+                        o restore-db-instance-from-db-snapshot
+
+                        o restore-db-instance-to-point-in-time
+
+                        DBSecurityGroupName -> (string)
+                            The name of the DB security group.
+
+                        Status -> (string)
+                            The status of the DB security group.
+
+                 VpcSecurityGroupMemberships -> (list)
+                     If the option requires access to a port,  then  this  VPC
+                     security group allows access to the port.
+
+                     (structure)
+                        This  data  type  is  used  as  a response element for
+                        queries on VPC security group membership.
+
+                        VpcSecurityGroupId -> (string)
+                            The name of the VPC security group.
+
+                        Status -> (string)
+                            The status of the VPC security group.
+
+          AllowsVpcAndNonVpcInstanceMemberships -> (boolean)
+              Indicates whether this option group can be applied to  both  VPC
+              and non-VPC instances. The value true indicates the option group
+              can be applied to both VPC and non-VPC instances.
+
+          VpcId -> (string)
+              If AllowsVpcAndNonVpcInstanceMemberships is false ,  this  field
+              is  blank.  If AllowsVpcAndNonVpcInstanceMemberships is e and
+              this field is blank, then this option group can  be  applied  to
+              both  VPC and non-VPC instances. If this field contains a value,
+              then this option group can only be applied to instances that are
+              in the VPC indicated by this field.
+
+          OptionGroupArn -> (string)
+              The Amazon Resource Name (ARN) for the option group.
+
+            
+     
+    '''
+    ret = {'name': name,
+           'result': True,
+           'comment': '',
+           'changes': {}
+           }
+    res = __salt__['boto_rds.option_group_exists'](name=name, tags=tags, region=region, key=key,
+                                                   keyid=keyid, profile=profile)
+    if not res.get('exists'):
+        if __opts__['test']:
+            ret['comment'] = 'Option group {0} is set to be created.'.format(name)
+            ret['result'] = None
+            return ret
+        created = __salt__['boto_rds.create_option_group'](name=name, db_engine=db_engine,
+                                                           db_major_engine_version=db_major_engine_version,
+                                                           description=description, tags=tags, region=region,
+                                                           key=key, keyid=keyid, profile=profile)
+        if not created:
+            ret['result'] = False
+            ret['comment'] = 'Failed to create {0} option group.'.format(name)
+            return ret
+        else:
+            option_group=__salt__['boto_rds.get_option_group'](name=name,tags=tags, region=region,
+                                                           key=key, keyid=keyid, profile=profile)
+            currentoptions=__salt__['boto_rds.get_option_group_options'](name=name,tags=tags, region=region,
+                                                                         key=key, keyid=keyid, profile=profile)
+            complement=__salt__['boto_rds.get_option_group_options_complement'](options, EngineName=db_engine, MajorEngineVersion=db_major_engine_version)
+            __salt__['boto_rds.update_option_group']()
+        ret['changes']['New Option Group'] = name
+        ret['comment'] = 'Option group {0} created.'.format(name)
+    else:
+
+            ret['comment'] = 'Option group modified.'.format(changes)
+        ret['comment'] = 'Option group {0} present.'.format(name)
 
 
 def parameter_present(name, db_parameter_group_family, description, parameters=None,
@@ -681,7 +874,8 @@ def parameter_present(name, db_parameter_group_family, description, parameters=N
             ret['comment'] = 'Parameter group {0} is set to be created.'.format(name)
             ret['result'] = None
             return ret
-        created = __salt__['boto_rds.create_parameter_group'](name=name, db_parameter_group_family=db_parameter_group_family,
+        created = __salt__['boto_rds.create_parameter_group'](name=name,
+                                                              db_parameter_group_family=db_parameter_group_family,
                                                               description=description, tags=tags, region=region,
                                                               key=key, keyid=keyid, profile=profile)
         if not created:
@@ -702,13 +896,15 @@ def parameter_present(name, db_parameter_group_family, description, parameters=N
                 else:
                     params[k] = six.text_type(value)
         log.debug('Parameters from user are : %s.', params)
-        options = __salt__['boto_rds.describe_parameters'](name=name, region=region, key=key, keyid=keyid, profile=profile)
+        options = __salt__['boto_rds.describe_parameters'](name=name, region=region, key=key, keyid=keyid,
+                                                           profile=profile)
         if not options.get('result'):
             ret['result'] = False
             ret['comment'] = os.linesep.join([ret['comment'], 'Faled to get parameters for group  {0}.'.format(name)])
             return ret
         for parameter in options['parameters'].values():
-            if parameter['ParameterName'] in params and params.get(parameter['ParameterName']) != six.text_type(parameter['ParameterValue']):
+            if parameter['ParameterName'] in params and params.get(parameter['ParameterName']) != six.text_type(
+                parameter['ParameterValue']):
                 log.debug(
                     'Values that are being compared for %s are %s:%s.',
                     parameter['ParameterName'],
@@ -718,17 +914,23 @@ def parameter_present(name, db_parameter_group_family, description, parameters=N
                 changed[parameter['ParameterName']] = params.get(parameter['ParameterName'])
         if changed:
             if __opts__['test']:
-                ret['comment'] = os.linesep.join([ret['comment'], 'Parameters {0} for group {1} are set to be changed.'.format(changed, name)])
+                ret['comment'] = os.linesep.join(
+                    [ret['comment'], 'Parameters {0} for group {1} are set to be changed.'.format(changed, name)])
                 ret['result'] = None
                 return ret
-            update = __salt__['boto_rds.update_parameter_group'](name, parameters=changed, apply_method=apply_method, tags=tags, region=region,
+            update = __salt__['boto_rds.update_parameter_group'](name, parameters=changed, apply_method=apply_method,
+                                                                 tags=tags, region=region,
                                                                  key=key, keyid=keyid, profile=profile)
             if 'error' in update:
                 ret['result'] = False
-                ret['comment'] = os.linesep.join([ret['comment'], 'Failed to change parameters {0} for group {1}:'.format(changed, name), update['error']['message']])
+                ret['comment'] = os.linesep.join(
+                    [ret['comment'], 'Failed to change parameters {0} for group {1}:'.format(changed, name),
+                     update['error']['message']])
                 return ret
             ret['changes']['Parameters'] = changed
-            ret['comment'] = os.linesep.join([ret['comment'], 'Parameters {0} for group {1} are changed.'.format(changed, name)])
+            ret['comment'] = os.linesep.join(
+                [ret['comment'], 'Parameters {0} for group {1} are changed.'.format(changed, name)])
         else:
-            ret['comment'] = os.linesep.join([ret['comment'], 'Parameters {0} for group {1} are present.'.format(params, name)])
+            ret['comment'] = os.linesep.join(
+                [ret['comment'], 'Parameters {0} for group {1} are present.'.format(params, name)])
     return ret

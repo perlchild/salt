@@ -42,9 +42,9 @@ Connection module for Amazon RDS
 :depends: boto3
 '''
 # keep lint from choking on _get_conn and _cache_id
-#pylint: disable=E0602
+# pylint: disable=E0602
 # pylint whinging perfectly valid code
-#pylint: disable=W0106
+# pylint: disable=W0106
 
 
 # Import Python libs
@@ -62,13 +62,15 @@ log = logging.getLogger(__name__)
 
 # Import third party libs
 from salt.ext import six
+
 # pylint: disable=import-error
 try:
-    #pylint: disable=unused-import
+    # pylint: disable=unused-import
     import boto
     import boto3
-    #pylint: enable=unused-import
+    # pylint: enable=unused-import
     from botocore.exceptions import ClientError
+
     logging.getLogger('boto').setLevel(logging.CRITICAL)
     logging.getLogger('boto3').setLevel(logging.CRITICAL)
     HAS_BOTO = True
@@ -173,6 +175,36 @@ def option_group_exists(name, tags=None, region=None, key=None, keyid=None,
         return {'error': __utils__['boto3.get_error'](e)}
 
 
+def get_option_group_options_complement(options=None, EngineName='string', MajorEngineVersion='string'):
+    conn = _get_conn(region=region, key=key, keyid=keyid, profile=profile)
+
+    try:
+        rds = conn.describe_option_group_options(EngineName=EngineName, MajorEngineVersion=MajorEngineVersion)
+        possibleoptions = [x.get('Name') for x in rds.items() if x.get('Name')]
+        chosenoptions = [x.get('OptionName') for x in options.items() if x.get('OptionName')]
+        return [possibleoptions - chosenoptions]
+    except ClientError as e:
+        return {'error': __utils__['boto3.get_error'](e)}
+
+
+def get_option_group_options(name, tags=None, region=None, key=None, keyid=None,
+                             profile=None):
+    '''
+    Check to see if an RDS option group exists.
+
+    CLI example::
+
+        salt myminion boto_rds.option_group_exists myoptiongr region=us-east-1
+    '''
+    conn = _get_conn(region=region, key=key, keyid=keyid, profile=profile)
+
+    try:
+        rds = conn.describe_option_groups(OptionGroupName=name)
+        return rds['Options']
+    except ClientError as e:
+        return {'error': __utils__['boto3.get_error'](e)}
+
+
 def parameter_group_exists(name, tags=None, region=None, key=None, keyid=None,
                            profile=None):
     '''
@@ -263,8 +295,8 @@ def create(name, allocated_storage, db_instance_class, engine,
                 'wait_status can be one of: {0}'.format(wait_stati))
     if vpc_security_groups:
         v_tmp = __salt__['boto_secgroup.convert_to_group_ids'](
-                groups=vpc_security_groups, region=region, key=key, keyid=keyid,
-                profile=profile)
+            groups=vpc_security_groups, region=region, key=key, keyid=keyid,
+            profile=profile)
         vpc_security_group_ids = (vpc_security_group_ids + v_tmp
                                   if vpc_security_group_ids else v_tmp)
 
@@ -294,7 +326,7 @@ def create(name, allocated_storage, db_instance_class, engine,
             return {'created': False}
         if not wait_status:
             return {'created': True, 'message':
-                    'RDS instance {0} created.'.format(name)}
+                'RDS instance {0} created.'.format(name)}
 
         while True:
             jmespath = 'DBInstances[*].DBInstanceStatus'
@@ -311,7 +343,7 @@ def create(name, allocated_storage, db_instance_class, engine,
             if stat == wait_status:
                 return {'created': True,
                         'message': 'RDS instance {0} created (current status '
-                        '{1})'.format(name, stat)}
+                                   '{1})'.format(name, stat)}
             time.sleep(10)
             log.info('Instance status after 10 seconds is: %s', stat)
 
@@ -339,12 +371,12 @@ def create_read_replica(name, source_name, db_instance_class=None,
     res = __salt__['boto_rds.exists'](source_name, tags, region, key, keyid, profile)
     if not res.get('exists'):
         return {'exists': bool(res), 'message':
-                'RDS instance source {0} does not exists.'.format(source_name)}
+            'RDS instance source {0} does not exists.'.format(source_name)}
 
     res = __salt__['boto_rds.exists'](name, tags, region, key, keyid, profile)
     if res.get('exists'):
         return {'exists': bool(res), 'message':
-                'RDS replica instance {0} already exists.'.format(name)}
+            'RDS replica instance {0} already exists.'.format(name)}
 
     try:
         conn = _get_conn(region=region, key=key, keyid=keyid, profile=profile)
@@ -438,10 +470,10 @@ def create_parameter_group(name, db_parameter_group_family, description,
                                              Tags=taglist)
         if not rds:
             return {'created': False, 'message':
-                    'Failed to create RDS parameter group {0}'.format(name)}
+                'Failed to create RDS parameter group {0}'.format(name)}
 
         return {'exists': bool(rds), 'message':
-                'Created RDS parameter group {0}'.format(name)}
+            'Created RDS parameter group {0}'.format(name)}
     except ClientError as e:
         return {'error': __utils__['boto3.get_error'](e)}
 
@@ -458,7 +490,7 @@ def create_subnet_group(name, description, subnet_ids, tags=None,
             region=us-east-1
     '''
     res = __salt__['boto_rds.subnet_group_exists'](name, tags, region, key,
-                                                 keyid, profile)
+                                                   keyid, profile)
     if res.get('exists'):
         return {'exists': bool(res)}
 
@@ -494,7 +526,7 @@ def update_parameter_group(name, parameters, apply_method="pending-reboot",
                                                       keyid, profile)
     if not res.get('exists'):
         return {'exists': bool(res), 'message':
-                'RDS parameter group {0} does not exist.'.format(name)}
+            'RDS parameter group {0} does not exist.'.format(name)}
 
     param_list = []
     for key, value in six.iteritems(parameters):
@@ -536,7 +568,7 @@ def describe(name, tags=None, region=None, key=None, keyid=None,
                                       profile)
     if not res.get('exists'):
         return {'exists': bool(res), 'message':
-                'RDS instance {0} does not exist.'.format(name)}
+            'RDS instance {0} does not exist.'.format(name)}
 
     try:
         conn = _get_conn(region=region, key=key, keyid=keyid, profile=profile)
@@ -680,22 +712,23 @@ def delete(name, skip_final_snapshot=None, final_db_snapshot_identifier=None,
             kwargs['SkipFinalSnapshot'] = bool(locals()['skip_final_snapshot'])
 
         if locals()['final_db_snapshot_identifier'] is not None:
-            kwargs['FinalDBSnapshotIdentifier'] = str(locals()['final_db_snapshot_identifier'])  # future lint: disable=blacklisted-function
+            kwargs['FinalDBSnapshotIdentifier'] = str(
+                locals()['final_db_snapshot_identifier'])  # future lint: disable=blacklisted-function
 
         res = conn.delete_db_instance(DBInstanceIdentifier=name, **kwargs)
 
         if not wait_for_deletion:
             return {'deleted': bool(res), 'message':
-                    'Deleted RDS instance {0}.'.format(name)}
+                'Deleted RDS instance {0}.'.format(name)}
 
         start_time = time.time()
         while True:
             res = __salt__['boto_rds.exists'](name=name, tags=tags, region=region,
-                                               key=key, keyid=keyid,
-                                               profile=profile)
+                                              key=key, keyid=keyid,
+                                              profile=profile)
             if not res.get('exists'):
                 return {'deleted': bool(res), 'message':
-                        'Deleted RDS instance {0} completely.'.format(name)}
+                    'Deleted RDS instance {0} completely.'.format(name)}
 
             if time.time() - start_time > timeout:
                 raise SaltInvocationError('RDS instance {0} has not been '
@@ -725,10 +758,10 @@ def delete_option_group(name, region=None, key=None, keyid=None, profile=None):
         res = conn.delete_option_group(OptionGroupName=name)
         if not res:
             return {'deleted': bool(res), 'message':
-                    'Failed to delete RDS option group {0}.'.format(name)}
+                'Failed to delete RDS option group {0}.'.format(name)}
 
         return {'deleted': bool(res), 'message':
-                'Deleted RDS option group {0}.'.format(name)}
+            'Deleted RDS option group {0}.'.format(name)}
     except ClientError as e:
         return {'error': __utils__['boto3.get_error'](e)}
 
@@ -750,7 +783,7 @@ def delete_parameter_group(name, region=None, key=None, keyid=None,
 
         r = conn.delete_db_parameter_group(DBParameterGroupName=name)
         return {'deleted': bool(r), 'message':
-                'Deleted RDS parameter group {0}.'.format(name)}
+            'Deleted RDS parameter group {0}.'.format(name)}
     except ClientError as e:
         return {'error': __utils__['boto3.get_error'](e)}
 
@@ -772,7 +805,7 @@ def delete_subnet_group(name, region=None, key=None, keyid=None,
 
         r = conn.delete_db_subnet_group(DBSubnetGroupName=name)
         return {'deleted': bool(r), 'message':
-                'Deleted RDS subnet group {0}.'.format(name)}
+            'Deleted RDS subnet group {0}.'.format(name)}
     except ClientError as e:
         return {'error': __utils__['boto3.get_error'](e)}
 
@@ -811,10 +844,10 @@ def describe_parameter_group(name, Filters=None, MaxRecords=None, Marker=None,
 
         if not info:
             return {'results': bool(info), 'message':
-                    'Failed to get RDS description for group {0}.'.format(name)}
+                'Failed to get RDS description for group {0}.'.format(name)}
 
         return {'results': bool(info), 'message':
-                'Got RDS descrition for group {0}.'.format(name)}
+            'Got RDS descrition for group {0}.'.format(name)}
     except ClientError as e:
         return {'error': __utils__['boto3.get_error'](e)}
 
@@ -859,7 +892,7 @@ def describe_parameters(name, Source=None, MaxRecords=None, Marker=None,
                 'IsModifieable', 'MinimumEngineVersion', 'ApplyMethod']
 
         parameters = odict.OrderedDict()
-        ret = {'result':  True}
+        ret = {'result': True}
 
         for p in pit:
             for result in p['Parameters']:
@@ -922,7 +955,7 @@ def modify_db_instance(name,
     res = __salt__['boto_rds.exists'](name, tags=None, region=region, key=key, keyid=keyid, profile=profile)
     if not res.get('exists'):
         return {'modified': False, 'message':
-                'RDS db instance {0} does not exist.'.format(name)}
+            'RDS db instance {0} does not exist.'.format(name)}
 
     try:
         conn = _get_conn(region=region, key=key, keyid=keyid, profile=profile)
@@ -943,10 +976,10 @@ def modify_db_instance(name,
 
         if not info:
             return {'modified': bool(info), 'message':
-                    'Failed to modify RDS db instance {0}.'.format(name)}
+                'Failed to modify RDS db instance {0}.'.format(name)}
 
         return {'modified': bool(info), 'message':
-                'Modified RDS db instance {0}.'.format(name),
+            'Modified RDS db instance {0}.'.format(name),
                 'results': dict(info)}
     except ClientError as e:
         return {'error': __utils__['boto3.get_error'](e)}
