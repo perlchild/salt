@@ -796,7 +796,7 @@ def option_present(name, db_engine, db_major_engine_version, description=None, o
             return ret
         created = __salt__['boto_rds.create_option_group'](name=name, db_engine=db_engine,
                                                            db_major_engine_version=db_major_engine_version,
-                                                           description=description, tags=tags, region=region,
+                                                           option_group_description=description, tags=tags, region=region,
                                                            key=key, keyid=keyid, profile=profile)
         if not created:
             ret['result'] = False
@@ -815,8 +815,8 @@ def option_present(name, db_engine, db_major_engine_version, description=None, o
         ret['changes']['New Option Group'] = name
         ret['comment'] = 'Option group {0} created.'.format(name)
     else:
-        #ret['comment'] = 'Option group modified.'.format(changes)
         ret['comment'] = 'Option group {0} present.'.format(name)
+    return ret
 
 
 def parameter_present(name, db_parameter_group_family, description, parameters=None,

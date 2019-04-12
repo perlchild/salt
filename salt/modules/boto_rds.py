@@ -175,11 +175,11 @@ def option_group_exists(name, tags=None, region=None, key=None, keyid=None,
         return {'error': __utils__['boto3.get_error'](e)}
 
 
-def get_option_group_options_complement(options=None, EngineName='string', MajorEngineVersion='string'):
+def get_option_group_options_complement(options=None, db_engine='string', db_engine_major_version='string'):
     conn = _get_conn(region=region, key=key, keyid=keyid, profile=profile)
 
     try:
-        rds = conn.describe_option_group_options(EngineName=EngineName, MajorEngineVersion=MajorEngineVersion)
+        rds = conn.describe_option_group_options(EngineName=db_engine, MajorEngineVersion=db_engine_major_version)
         possibleoptions = [x.get('Name') for x,y in rds.items() if x.get('Name')]
         chosenoptions = [x.get('OptionName') for x in options.items() if x.get('OptionName')]
         return [possibleoptions - chosenoptions]
@@ -190,11 +190,11 @@ def get_option_group_options_complement(options=None, EngineName='string', Major
 def get_option_group_options(name, tags=None, region=None, key=None, keyid=None,
                              profile=None):
     '''
-    Check to see if an RDS option group exists.
+    Get the options provided by an option group.
 
     CLI example::
 
-        salt myminion boto_rds.option_group_exists myoptiongr region=us-east-1
+        salt myminion boto_rds.get_option_group_options myoptiongr region=us-east-1
     '''
     conn = _get_conn(region=region, key=key, keyid=keyid, profile=profile)
 
@@ -409,7 +409,7 @@ def create_read_replica(name, source_name, db_instance_class=None,
         return {'error': __utils__['boto3.get_error'](e)}
 
 
-def create_option_group(name, engine_name, major_engine_version,
+def create_option_group(name, db_engine, db_major_engine_version,
                         option_group_description, tags=None, region=None,
                         key=None, keyid=None, profile=None):
     '''
@@ -432,8 +432,8 @@ def create_option_group(name, engine_name, major_engine_version,
 
         taglist = _tag_doc(tags)
         rds = conn.create_option_group(OptionGroupName=name,
-                                       EngineName=engine_name,
-                                       MajorEngineVersion=major_engine_version,
+                                       EngineName=db_engine,
+                                       MajorEngineVersion=db_major_engine_version,
                                        OptionGroupDescription=option_group_description,
                                        Tags=taglist)
 
@@ -524,22 +524,21 @@ def update_option_group(name,db_engine,db_major_engine_version, apply_immediatel
     res = __salt__['boto_rds.option_group_exists'](name, tags, region, key,
                                                    keyid, profile)
     if not res.get('exists'):
-        return {'exists': bool(res), 'message':
+        return {'exists': not bool(res), 'message':
             'RDS option group {0} does not exist.'.format(name)}
     try:
         conn = _get_conn(region=region, key=key, keyid=keyid, profile=profile)
         if not conn:
             return {'results': bool(conn)}
         else:
-            currentoptions=get_option_group_options(name=name,tags=tags, region=region,
-                                                                  key=key, keyid=keyid, profile=profile)
+            currentoptions=get_option_group_options(name=name,tags=tags, region=region, key=key, keyid=keyid, profile=profile)
             if options == currentoptions:
-                return {'results': bool(res)}
+                return {'exists': True, 'message':
+                        'RDS option group {0} already has options.'.format(name)}
             else:
-                complement=get_option_group_options_complement(options, EngineName=db_engine, MajorEngineVersion=db_major_engine_version)
-                conn.modify_option_group(name,OptionsToInclude=options,OptionsToRemove=complement,ApplyImmediately=apply_immediately)
-
-        return {'results': bool(res)}
+                complement=get_option_group_options_complement(options, db_engine=db_engine, db_major_engine_version=db_major_engine_version)
+                res=conn.modify_option_group(name,OptionsToInclude=options,OptionsToRemove=complement,ApplyImmediately=apply_immediately)
+                return {'results': bool(res)}
     except ClientError as e:
         return {'error': __utils__['boto3.get_error'](e)}
 
