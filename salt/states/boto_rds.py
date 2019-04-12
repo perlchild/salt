@@ -638,7 +638,7 @@ def subnet_group_absent(name, tags=None, region=None, key=None, keyid=None, prof
     return ret
 
 
-def option_group_present(name, db_engine, db_major_engine_version, description=None, options=None,
+def option_present(name, db_engine, db_major_engine_version, description=None, options=None,
                          tags=None, region=None, key=None, keyid=None, profile=None):
     '''
         name
@@ -803,17 +803,19 @@ def option_group_present(name, db_engine, db_major_engine_version, description=N
             ret['comment'] = 'Failed to create {0} option group.'.format(name)
             return ret
         else:
-            option_group=__salt__['boto_rds.get_option_group'](name=name,tags=tags, region=region,
-                                                           key=key, keyid=keyid, profile=profile)
-            currentoptions=__salt__['boto_rds.get_option_group_options'](name=name,tags=tags, region=region,
-                                                                         key=key, keyid=keyid, profile=profile)
-            complement=__salt__['boto_rds.get_option_group_options_complement'](options, EngineName=db_engine, MajorEngineVersion=db_major_engine_version)
-            __salt__['boto_rds.update_option_group']()
+            if options:
+                changes=__salt__['boto_rds.update_option_group'](name=name,options=options,tags=tags, region=region,
+                                                                key=key, keyid=keyid, profile=profile)
+            # option_group=__salt__['boto_rds.get_option_group'](name=name,tags=tags, region=region,
+            #                                                key=key, keyid=keyid, profile=profile)
+            # currentoptions=__salt__['boto_rds.get_option_group_options'](name=name,tags=tags, region=region,
+            #                                                              key=key, keyid=keyid, profile=profile)
+            # complement=__salt__['boto_rds.get_option_group_options_complement'](options, EngineName=db_engine, MajorEngineVersion=db_major_engine_version)
+            # changes=__salt__['boto_rds.update_option_group'](name,option_group,complement)
         ret['changes']['New Option Group'] = name
         ret['comment'] = 'Option group {0} created.'.format(name)
     else:
-
-            ret['comment'] = 'Option group modified.'.format(changes)
+        #ret['comment'] = 'Option group modified.'.format(changes)
         ret['comment'] = 'Option group {0} present.'.format(name)
 
 

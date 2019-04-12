@@ -180,7 +180,7 @@ def get_option_group_options_complement(options=None, EngineName='string', Major
 
     try:
         rds = conn.describe_option_group_options(EngineName=EngineName, MajorEngineVersion=MajorEngineVersion)
-        possibleoptions = [x.get('Name') for x in rds.items() if x.get('Name')]
+        possibleoptions = [x.get('Name') for x,y in rds.items() if x.get('Name')]
         chosenoptions = [x.get('OptionName') for x in options.items() if x.get('OptionName')]
         return [possibleoptions - chosenoptions]
     except ClientError as e:
@@ -505,6 +505,41 @@ def create_subnet_group(name, description, subnet_ids, tags=None,
                                           SubnetIds=subnet_ids, Tags=taglist)
 
         return {'created': bool(rds)}
+    except ClientError as e:
+        return {'error': __utils__['boto3.get_error'](e)}
+
+
+def update_option_group(name,db_engine,db_major_engine_version, apply_immediately=False, options=None,
+                        tags=None, region=None, key=None, keyid=None,
+                        profile=None):
+    '''
+    Update an RDS option group.
+
+    CLI example::
+
+        salt myminion boto_rds.update_option_group my-option-group \
+                options='[{"OptionName": "OEM", "Port": "5500" },{"OptionName": "APEX", "OptionVersion": "1.0"}]' \
+                region=us-east-1
+    '''
+    res = __salt__['boto_rds.option_group_exists'](name, tags, region, key,
+                                                   keyid, profile)
+    if not res.get('exists'):
+        return {'exists': bool(res), 'message':
+            'RDS option group {0} does not exist.'.format(name)}
+    try:
+        conn = _get_conn(region=region, key=key, keyid=keyid, profile=profile)
+        if not conn:
+            return {'results': bool(conn)}
+        else:
+            currentoptions=get_option_group_options(name=name,tags=tags, region=region,
+                                                                  key=key, keyid=keyid, profile=profile)
+            if options == currentoptions:
+                return {'results': bool(res)}
+            else:
+                complement=get_option_group_options_complement(options, EngineName=db_engine, MajorEngineVersion=db_major_engine_version)
+                conn.modify_option_group(name,OptionsToInclude=options,OptionsToRemove=complement,ApplyImmediately=apply_immediately)
+
+        return {'results': bool(res)}
     except ClientError as e:
         return {'error': __utils__['boto3.get_error'](e)}
 
