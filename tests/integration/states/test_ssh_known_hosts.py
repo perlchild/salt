@@ -5,8 +5,10 @@ Test the ssh_known_hosts states
 
 # Import python libs
 from __future__ import absolute_import, unicode_literals, print_function
+
 import os
 import shutil
+import sys
 
 # Import Salt Testing libs
 from tests.support.case import ModuleCase
@@ -14,11 +16,16 @@ from tests.support.mixins import SaltReturnAssertsMixin
 from tests.support.runtests import RUNTIME_VARS
 from tests.support.helpers import skip_if_binaries_missing
 
+# Import 3rd-party libs
+from tests.support.unit import skipIf, WAR_ROOM_SKIP  # WAR ROOM temp import
+from salt.ext import six
+
 GITHUB_FINGERPRINT = '9d:38:5b:83:a9:17:52:92:56:1a:5e:c4:d4:81:8e:0a:ca:51:a2:64:f1:74:20:11:2e:f8:8a:c3:a1:39:49:8f'
 GITHUB_IP = '192.30.253.113'
 
 
 @skip_if_binaries_missing(['ssh', 'ssh-keygen'], check_all=True)
+@skipIf(WAR_ROOM_SKIP, 'WAR ROOM TEMPORARY SKIP')
 class SSHKnownHostsStateTest(ModuleCase, SaltReturnAssertsMixin):
     '''
     Validate the ssh state
@@ -57,8 +64,7 @@ class SSHKnownHostsStateTest(ModuleCase, SaltReturnAssertsMixin):
                 )
                 self.skipTest('Unable to receive remote host key')
             except AssertionError:
-                # raise initial assertion error
-                raise err
+                six.reraise(*sys.exc_info())
 
         self.assertSaltStateChangesEqual(
             ret, GITHUB_FINGERPRINT, keys=('new', 0, 'fingerprint')
@@ -85,7 +91,7 @@ class SSHKnownHostsStateTest(ModuleCase, SaltReturnAssertsMixin):
                         )
                 self.skipTest('Unable to receive remote host key')
             except AssertionError:
-                raise err
+                six.reraise(*sys.exc_info())
 
         # record for every host must be available
         ret = self.run_function(

@@ -5,9 +5,11 @@ Tests for the salt-run command
 # Import Python libs
 from __future__ import absolute_import, print_function, unicode_literals
 
+import logging
+
 # Import Salt Testing libs
 from tests.support.case import ShellCase
-from tests.support.unit import skipIf
+from tests.support.unit import skipIf, WAR_ROOM_SKIP
 
 try:
     import libnacl.secret  # pylint: disable=unused-import
@@ -15,6 +17,8 @@ try:
     HAS_LIBNACL = True
 except ImportError:
     HAS_LIBNACL = False
+
+log = logging.getLogger(__name__)
 
 
 @skipIf(not HAS_LIBNACL, 'skipping test_nacl, libnacl is unavailable')
@@ -150,3 +154,38 @@ class NaclTest(ShellCase):
             sk=sk,
         )
         self.assertEqual(unencrypted_data, ret['return'])
+
+    @skipIf(WAR_ROOM_SKIP, 'WAR ROOM TEMPORARY SKIP')
+    def test_enc_dec_no_pk_no_sk(self):
+        '''
+        Store, list, fetch, then flush data
+        '''
+        # Store the data
+        ret = self.run_run_plus(
+            'nacl.keygen',
+        )
+        self.assertIn('pk', ret['return'])
+        self.assertIn('sk', ret['return'])
+        pk = ret['return']['pk']
+        sk = ret['return']['sk']
+
+        unencrypted_data = b'hello'
+
+        # Encrypt with pk
+        ret = self.run_run_plus(
+            'nacl.enc',
+            data=unencrypted_data,
+            pk=None,
+        )
+        self.assertIn('Exception: no pubkey or pk_file found', ret['return'])
+
+        self.assertIn('return', ret)
+        encrypted_data = ret['return']
+
+        # Decrypt with sk
+        ret = self.run_run_plus(
+            'nacl.dec',
+            data=encrypted_data,
+            sk=None,
+        )
+        self.assertIn('Exception: no key or sk_file found', ret['return'])

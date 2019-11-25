@@ -9,6 +9,7 @@ import os
 import textwrap
 import tempfile
 import time
+import sys
 
 # Import Salt Testing libs
 from tests.support.runtests import RUNTIME_VARS
@@ -19,6 +20,10 @@ from tests.support.mixins import SaltReturnAssertsMixin
 import salt.utils.files
 import salt.utils.platform
 
+# Import 3rd-party libs
+from tests.support.unit import skipIf, WAR_ROOM_SKIP; skipIf(WAR_ROOM_SKIP, 'WAR ROOM TEMPORARY SKIP')  # pylint: disable=C0321,E8702
+from salt.ext import six
+
 IS_WINDOWS = salt.utils.platform.is_windows()
 
 
@@ -26,20 +31,29 @@ class CMDTest(ModuleCase, SaltReturnAssertsMixin):
     '''
     Validate the cmd state
     '''
+    @classmethod
+    def setUpClass(cls):
+        cls.cmd = 'dir' if IS_WINDOWS else 'ls'
+
     def test_run_simple(self):
         '''
         cmd.run
         '''
-        cmd = 'dir' if IS_WINDOWS else 'ls'
-        ret = self.run_state('cmd.run', name=cmd, cwd=tempfile.gettempdir())
+        ret = self.run_state(
+            'cmd.run',
+            name=self.cmd,
+            cwd=tempfile.gettempdir())
         self.assertSaltTrueReturn(ret)
 
-    def test_test_run_simple(self):
+    def test_run_simple_test_true(self):
         '''
         cmd.run test interface
         '''
-        ret = self.run_state('cmd.run', name='ls',
-                             cwd=tempfile.gettempdir(), test=True)
+        ret = self.run_state(
+            'cmd.run',
+            name=self.cmd,
+            cwd=tempfile.gettempdir(),
+            test=True)
         self.assertSaltNoneReturn(ret)
 
     def test_run_hide_output(self):
@@ -48,7 +62,7 @@ class CMDTest(ModuleCase, SaltReturnAssertsMixin):
         '''
         ret = self.run_state(
             u'cmd.run',
-            name=u'ls',
+            name=self.cmd,
             hide_output=True)
         self.assertSaltTrueReturn(ret)
         ret = ret[next(iter(ret))]
@@ -56,6 +70,7 @@ class CMDTest(ModuleCase, SaltReturnAssertsMixin):
         self.assertEqual(ret[u'changes'][u'stderr'], u'')
 
 
+@skipIf(WAR_ROOM_SKIP, 'WAR ROOM TEMPORARY SKIP')
 class CMDRunRedirectTest(ModuleCase, SaltReturnAssertsMixin):
     '''
     Validate the cmd state of run_redirect
@@ -71,7 +86,7 @@ class CMDRunRedirectTest(ModuleCase, SaltReturnAssertsMixin):
             os.close(fd)
         except OSError as exc:
             if exc.errno != errno.EBADF:
-                raise exc
+                six.reraise(*sys.exc_info())
 
         # Create the testfile and release the handle
         fd, self.test_tmp_path = tempfile.mkstemp()
@@ -79,7 +94,7 @@ class CMDRunRedirectTest(ModuleCase, SaltReturnAssertsMixin):
             os.close(fd)
         except OSError as exc:
             if exc.errno != errno.EBADF:
-                raise exc
+                six.reraise(*sys.exc_info())
 
         super(CMDRunRedirectTest, self).setUp()
 

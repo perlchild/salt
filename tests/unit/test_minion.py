@@ -9,18 +9,20 @@ import copy
 import os
 
 # Import Salt Testing libs
-from tests.support.unit import TestCase, skipIf
+from tests.support.unit import TestCase, skipIf, WAR_ROOM_SKIP
 from tests.support.mock import NO_MOCK, NO_MOCK_REASON, patch, MagicMock
 from tests.support.mixins import AdaptedConfigurationTestCaseMixin
 from tests.support.helpers import skip_if_not_root
 # Import salt libs
 import salt.minion
 import salt.utils.event as event
+import salt.utils.platform
 from salt.exceptions import SaltSystemExit, SaltMasterUnresolvableError
 import salt.syspaths
+from tornado.concurrent import Future
+from salt.ext.six.moves import range
 import tornado
 import tornado.testing
-from salt.ext.six.moves import range
 
 
 @skipIf(NO_MOCK, NO_MOCK_REASON)
@@ -285,6 +287,7 @@ class MinionTestCase(TestCase, AdaptedConfigurationTestCaseMixin):
             finally:
                 minion.destroy()
 
+    @skipIf(salt.utils.platform.is_darwin() and WAR_ROOM_SKIP, 'WAR ROOM TEMPORARY SKIP - mac only july 19')
     def test_valid_ipv4_master_address_ipv6_enabled(self):
         '''
         Tests that the 'scheduler_before_connect' option causes the scheduler to be initialized before connect.
@@ -320,6 +323,7 @@ class MinionTestCase(TestCase, AdaptedConfigurationTestCaseMixin):
             self.assertRaises(SaltMasterUnresolvableError,
                               salt.minion.resolve_dns, self.opts)
 
+    @skipIf(WAR_ROOM_SKIP, 'WAR ROOM TEMPORARY SKIP')
     def test_minion_manage_schedule(self):
         '''
         Tests that the manage_schedule will call the add function, adding
@@ -418,3 +422,53 @@ class MinionAsyncTestCase(TestCase, AdaptedConfigurationTestCaseMixin, tornado.t
             except SaltSystemExit:
                 result = False
         self.assertTrue(result)
+
+    def test_multi_master_uri_list(self):
+        '''
+        master_uri_list is a generated opts attr used to represent ready to feed uri's
+        into salt.utils.event objects to communicate with masters. assert that it works
+        '''
+        _mock = MagicMock()
+        future_stub = Future()
+        future_stub.set_result(None)
+
+        def dns_check(master, *args, **kwargs):
+            return master
+
+        # using context managers gets funky as ioloop callbacks reset it
+        patches = [
+            patch('salt.transport.client.AsyncPubChannel.factory', return_value=_mock),
+            patch('salt.minion.Minion.tune_in', return_value=None),
+            patch('salt.minion.Minion._post_master_init', return_value=future_stub),
+            patch('salt.utils.network.dns_check', new=dns_check),
+        ]
+        for _patch in patches:
+            _patch.start()
+
+        mock_opts = salt.config.DEFAULT_MINION_OPTS.copy()
+        mock_opts['master'] = ['master1', 'master2', 'master3']
+        mock_opts['__role'] = '__minion'
+
+        minion_manager = salt.minion.MinionManager(mock_opts)
+        minion_manager.io_loop = self.io_loop
+        _mock.connect.return_value = future_stub
+
+        try:
+            minion_manager._spawn_minions()
+
+            # we just need to enter the loop to run cb's added to next iteration
+            def timeout_func():
+                self.io_loop.stop()
+
+            __timeout = self.io_loop.add_timeout(self.io_loop.time() + 1, timeout_func)
+            self.io_loop.start()
+
+            self.assertTrue(len(minion_manager.minions) == 3)
+
+            for minion in minion_manager.minions:
+                self.assertEqual(minion.opts['master_uri_list'], ['tcp://master1:4506', 'tcp://master2:4506', 'tcp://master3:4506'])
+        finally:
+            minion_manager.destroy()
+
+            for _patch in patches:
+                _patch.stop()

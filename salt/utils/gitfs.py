@@ -5,8 +5,8 @@ Classes which provide the shared base for GitFS, git_pillar, and winrepo
 
 # Import python libs
 from __future__ import absolute_import, print_function, unicode_literals
-import copy
 import contextlib
+import copy
 import errno
 import fnmatch
 import glob
@@ -17,6 +17,7 @@ import shlex
 import shutil
 import stat
 import subprocess
+import sys
 import time
 import tornado.ioloop
 import weakref
@@ -832,7 +833,7 @@ class GitProvider(object):
                                     'by another master.')
                     log.warning(msg)
                     if failhard:
-                        raise exc
+                        six.reraise(*sys.exc_info())
                     return
                 elif pid and pid_exists(pid):
                     log.warning('Process %d has a %s %s lock (%s)',
@@ -1041,6 +1042,21 @@ class GitProvider(object):
                 if candidate is not None:
                     return candidate
 
+        if self.fallback:
+            for ref_type in self.ref_types:
+                try:
+                    func_name = 'get_tree_from_{0}'.format(ref_type)
+                    func = getattr(self, func_name)
+                except AttributeError:
+                    log.error(
+                        '%s class is missing function \'%s\'',
+                        self.__class__.__name__, func_name
+                    )
+                else:
+                    candidate = func(self.fallback)
+                    if candidate is not None:
+                        return candidate
+
         # No matches found
         return None
 
@@ -1144,12 +1160,17 @@ class GitPython(GitProvider):
             head_sha = None
 
         # 'origin/' + tgt_ref ==> matches a branch head
-        # 'tags/' + tgt_ref + '@{commit}' ==> matches tag's commit
-        for rev_parse_target, checkout_ref in (
-                ('origin/' + tgt_ref, 'origin/' + tgt_ref),
-                ('tags/' + tgt_ref, 'tags/' + tgt_ref)):
+        # 'tags/' + tgt_ref ==> matches tag's commit
+        checkout_refs = [
+                ('origin/' + tgt_ref, False),
+                ('tags/' + tgt_ref, False)]
+        if self.fallback:
+            checkout_refs.extend([
+                ('origin/' + self.fallback, True),
+                ('tags/' + self.fallback, True)])
+        for checkout_ref, fallback in checkout_refs:
             try:
-                target_sha = self.repo.rev_parse(rev_parse_target).hexsha
+                target_sha = self.repo.rev_parse(checkout_ref).hexsha
             except Exception:
                 # ref does not exist
                 continue
@@ -1162,10 +1183,11 @@ class GitPython(GitProvider):
                 with self.gen_lock(lock_type='checkout'):
                     self.repo.git.checkout(checkout_ref)
                     log.debug(
-                        '%s remote \'%s\' has been checked out to %s',
+                        '%s remote \'%s\' has been checked out to %s%s',
                         self.role,
                         self.id,
-                        checkout_ref
+                        checkout_ref,
+                        ' as fallback' if fallback else ''
                     )
             except GitLockError as exc:
                 if exc.errno == errno.EEXIST:
@@ -1497,6 +1519,11 @@ class Pygit2(GitProvider):
             return False
 
         try:
+            if remote_ref not in refs and tag_ref not in refs and self.fallback:
+                tgt_ref = self.fallback
+                local_ref = 'refs/heads/' + tgt_ref
+                remote_ref = 'refs/remotes/origin/' + tgt_ref
+                tag_ref = 'refs/tags/' + tgt_ref
             if remote_ref in refs:
                 # Get commit id for the remote ref
                 oid = self.peel(self.repo.lookup_reference(remote_ref)).id
@@ -1662,6 +1689,9 @@ class Pygit2(GitProvider):
 
         self.gitdir = salt.utils.path.join(self.repo.workdir, '.git')
         self.enforce_git_config()
+        git_config = os.path.join(self.gitdir, 'config')
+        if os.path.exists(git_config) and PYGIT2_VERSION >= _LooseVersion('0.28.0'):
+            self.repo.config.add_file(git_config)
 
         return new
 
@@ -2758,8 +2788,7 @@ class GitFS(GitBase):
         '''
         fnd = {'path': '',
                'rel': ''}
-        if os.path.isabs(path) or \
-                (not salt.utils.stringutils.is_hex(tgt_env) and tgt_env not in self.envs()):
+        if os.path.isabs(path):
             return fnd
 
         dest = salt.utils.path.join(self.cache_root, 'refs', tgt_env, path)
@@ -2793,6 +2822,8 @@ class GitFS(GitBase):
             if repo.mountpoint(tgt_env) \
                     and not path.startswith(repo.mountpoint(tgt_env) + os.sep):
                 continue
+            if not salt.utils.stringutils.is_hex(tgt_env) and tgt_env not in self.envs() and not repo.fallback:
+                continue
             repo_path = path[len(repo.mountpoint(tgt_env)):].lstrip(os.sep)
             if repo.root(tgt_env):
                 repo_path = salt.utils.path.join(repo.root(tgt_env), repo_path)
@@ -2825,7 +2856,7 @@ class GitFS(GitBase):
                         return _add_file_stat(fnd, blob_mode)
             except IOError as exc:
                 if exc.errno != errno.ENOENT:
-                    raise exc
+                    six.reraise(*sys.exc_info())
 
             with salt.utils.files.fopen(lk_fn, 'w'):
                 pass
@@ -2907,13 +2938,13 @@ class GitFS(GitBase):
             return ret
         except IOError as exc:
             if exc.errno != errno.ENOENT:
-                raise exc
+                six.reraise(*sys.exc_info())
 
         try:
             os.makedirs(os.path.dirname(hashdest))
         except OSError as exc:
             if exc.errno != errno.EEXIST:
-                raise exc
+                six.reraise(*sys.exc_info())
 
         ret['hsum'] = salt.utils.hashutils.get_hash(path, self.opts['hash_type'])
         with salt.utils.files.fopen(hashdest, 'w+') as fp_:
@@ -2950,9 +2981,10 @@ class GitFS(GitBase):
             return cache_match
         if refresh_cache:
             ret = {'files': set(), 'symlinks': {}, 'dirs': set()}
-            if salt.utils.stringutils.is_hex(load['saltenv']) \
-                    or load['saltenv'] in self.envs():
-                for repo in self.remotes:
+            for repo in self.remotes:
+                if salt.utils.stringutils.is_hex(load['saltenv']) \
+                        or load['saltenv'] in self.envs() \
+                        or repo.fallback:
                     repo_files, repo_symlinks = repo.file_list(load['saltenv'])
                     ret['files'].update(repo_files)
                     ret['symlinks'].update(repo_symlinks)
@@ -3025,7 +3057,7 @@ class GitPillar(GitBase):
                 if repo.branch == '__env__' and hasattr(repo, 'all_saltenvs'):
                     env = self.opts.get('pillarenv') \
                         or self.opts.get('saltenv') \
-                        or self.opts.get('git_pillar_base')
+                        or 'base'
                 elif repo.env:
                     env = repo.env
                 else:

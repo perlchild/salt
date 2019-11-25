@@ -82,7 +82,7 @@ from tests.support.helpers import (
     skip_if_not_root
 )
 from tests.support.mock import NO_MOCK, NO_MOCK_REASON
-from tests.support.unit import skipIf
+from tests.support.unit import skipIf, WAR_ROOM_SKIP
 
 # Import Salt libs
 import salt.utils.path
@@ -125,6 +125,7 @@ def _windows_or_mac():
     return salt.utils.platform.is_windows() or salt.utils.platform.is_darwin()
 
 
+@skipIf(WAR_ROOM_SKIP, 'WAR ROOM TEMPORARY SKIP')
 class GitPythonMixin(object):
     '''
     GitPython doesn't support anything fancy in terms of authentication
@@ -488,7 +489,64 @@ class GitPythonMixin(object):
                         'nested_dict': {'dev': True}}}
         )
 
+    def test_all_saltenvs_base(self):
+        '''
+        Test all_saltenvs parameter with base pillarenv.
+        '''
+        ret = self.get_pillar('''\
+            file_ignore_regex: []
+            file_ignore_glob: []
+            git_pillar_provider: gitpython
+            cachedir: {cachedir}
+            extension_modules: {extmods}
+            ext_pillar:
+              - git:
+                - __env__ {url_extra_repo}:
+                  - all_saltenvs: master
+                - __env__ {url}:
+                  - mountpoint: nowhere
+            ''')
+        self.assertEqual(
+            ret,
+            {'branch': 'master',
+             'motd': 'The force will be with you. Always.',
+             'mylist': ['master'],
+             'mydict': {'master': True,
+                        'nested_list': ['master'],
+                        'nested_dict': {'master': True}}}
+        )
 
+    def test_fallback(self):
+        '''
+        Test fallback parameter.
+        '''
+        ret = self.get_pillar('''\
+            file_ignore_regex: []
+            file_ignore_glob: []
+            git_pillar_provider: gitpython
+            cachedir: {cachedir}
+            extension_modules: {extmods}
+            pillarenv: nonexisting
+            ext_pillar:
+              - git:
+                - __env__ {url_extra_repo}:
+                  - fallback: master
+                - __env__ {url}:
+                  - mountpoint: nowhere
+                  - fallback: dev
+            ''')
+        self.assertEqual(
+            ret,
+            {'branch': 'dev',
+             'motd': 'The force will be with you. Always.',
+             'mylist': ['dev'],
+             'mydict': {'dev': True,
+                        'nested_list': ['dev'],
+                        'nested_dict': {'dev': True}}}
+        )
+
+
+@skipIf(WAR_ROOM_SKIP, 'WAR ROOM TEMPORARY SKIP')
 @destructiveTest
 @skipIf(NO_MOCK, NO_MOCK_REASON)
 @skipIf(_windows_or_mac(), 'minion is windows or mac')
@@ -505,6 +563,7 @@ class TestGitPythonSSH(GitPillarSSHTestBase, GitPythonMixin):
     passphrase = PASSWORD
 
 
+@skipIf(WAR_ROOM_SKIP, 'WAR ROOM TEMPORARY SKIP')
 @skipIf(NO_MOCK, NO_MOCK_REASON)
 @skipIf(_windows_or_mac(), 'minion is windows or mac')
 @skip_if_not_root
@@ -518,6 +577,7 @@ class TestGitPythonHTTP(GitPillarHTTPTestBase, GitPythonMixin):
     pass
 
 
+@skipIf(WAR_ROOM_SKIP, 'WAR ROOM TEMPORARY SKIP')
 @skipIf(NO_MOCK, NO_MOCK_REASON)
 @skipIf(_windows_or_mac(), 'minion is windows or mac')
 @skip_if_not_root
@@ -553,6 +613,7 @@ class TestGitPythonAuthenticatedHTTP(TestGitPythonHTTP, GitPythonMixin):
         cls.ext_opts['password'] = cls.password
 
 
+@skipIf(WAR_ROOM_SKIP, 'WAR ROOM TEMPORARY SKIP')
 @destructiveTest
 @skipIf(NO_MOCK, NO_MOCK_REASON)
 @skipIf(_windows_or_mac(), 'minion is windows or mac')
@@ -1742,7 +1803,210 @@ class TestPygit2SSH(GitPillarSSHTestBase):
             ''')
         self.assertEqual(ret, expected)
 
+    @requires_system_grains
+    def test_all_saltenvs_base(self, grains):
+        '''
+        Test all_saltenvs parameter.
+        '''
+        expected = {'branch': 'master',
+             'motd': 'The force will be with you. Always.',
+             'mylist': ['master'],
+             'mydict': {'master': True,
+                        'nested_list': ['master'],
+                        'nested_dict': {'master': True}
+                       }
+        }
 
+        # Test with passphraseless key and global credential options
+        ret = self.get_pillar('''\
+            file_ignore_regex: []
+            file_ignore_glob: []
+            git_pillar_provider: pygit2
+            git_pillar_pubkey: {pubkey_nopass}
+            git_pillar_privkey: {privkey_nopass}
+            cachedir: {cachedir}
+            extension_modules: {extmods}
+            ext_pillar:
+              - git:
+                - __env__ {url_extra_repo}:
+                  - all_saltenvs: master
+                - __env__ {url}:
+                  - mountpoint: nowhere
+            ''')
+        self.assertEqual(ret, expected)
+
+        # Test with passphraseless key and per-repo credential options
+        ret = self.get_pillar('''\
+            file_ignore_regex: []
+            file_ignore_glob: []
+            git_pillar_provider: pygit2
+            cachedir: {cachedir}
+            extension_modules: {extmods}
+            ext_pillar:
+              - git:
+                - __env__ {url_extra_repo}:
+                  - all_saltenvs: master
+                  - pubkey: {pubkey_nopass}
+                  - privkey: {privkey_nopass}
+                - __env__ {url}:
+                  - mountpoint: nowhere
+                  - pubkey: {pubkey_nopass}
+                  - privkey: {privkey_nopass}
+            ''')
+        self.assertEqual(ret, expected)
+
+        if grains['os_family'] == 'Debian':
+            # passphrase-protected currently does not work here
+            return
+
+        # Test with passphrase-protected key and global credential options
+        ret = self.get_pillar('''\
+            file_ignore_regex: []
+            file_ignore_glob: []
+            git_pillar_provider: pygit2
+            git_pillar_pubkey: {pubkey_withpass}
+            git_pillar_privkey: {privkey_withpass}
+            git_pillar_passphrase: {passphrase}
+            cachedir: {cachedir}
+            extension_modules: {extmods}
+            ext_pillar:
+              - git:
+                - __env__ {url_extra_repo}:
+                  - all_saltenvs: master
+                - __env__ {url}:
+                  - mountpoint: nowhere
+            ''')
+        self.assertEqual(ret, expected)
+
+        # Test with passphrase-protected key and per-repo credential options
+        ret = self.get_pillar('''\
+            file_ignore_regex: []
+            file_ignore_glob: []
+            git_pillar_provider: pygit2
+            cachedir: {cachedir}
+            extension_modules: {extmods}
+            ext_pillar:
+              - git:
+                - __env__ {url_extra_repo}:
+                  - all_saltenvs: master
+                  - pubkey: {pubkey_nopass}
+                  - privkey: {privkey_nopass}
+                  - passphrase: {passphrase}
+                - __env__ {url}:
+                  - mountpoint: nowhere
+                  - pubkey: {pubkey_nopass}
+                  - privkey: {privkey_nopass}
+                  - passphrase: {passphrase}
+            ''')
+        self.assertEqual(ret, expected)
+
+    @requires_system_grains
+    def test_fallback(self, grains):
+        '''
+        Test fallback parameter.
+        '''
+        expected = {'branch': 'dev',
+             'motd': 'The force will be with you. Always.',
+             'mylist': ['dev'],
+             'mydict': {'dev': True,
+                        'nested_list': ['dev'],
+                        'nested_dict': {'dev': True}
+                       }
+        }
+
+        # Test with passphraseless key and global credential options
+        ret = self.get_pillar('''\
+            file_ignore_regex: []
+            file_ignore_glob: []
+            git_pillar_provider: pygit2
+            git_pillar_pubkey: {pubkey_nopass}
+            git_pillar_privkey: {privkey_nopass}
+            cachedir: {cachedir}
+            extension_modules: {extmods}
+            pillarenv: nonexisting
+            ext_pillar:
+              - git:
+                - __env__ {url_extra_repo}:
+                  - fallback: master
+                - __env__ {url}:
+                  - mountpoint: nowhere
+                  - fallback: dev
+            ''')
+        self.assertEqual(ret, expected)
+
+        # Test with passphraseless key and per-repo credential options
+        ret = self.get_pillar('''\
+            file_ignore_regex: []
+            file_ignore_glob: []
+            git_pillar_provider: pygit2
+            cachedir: {cachedir}
+            extension_modules: {extmods}
+            pillarenv: nonexisting
+            ext_pillar:
+              - git:
+                - __env__ {url_extra_repo}:
+                  - fallback: master
+                  - pubkey: {pubkey_nopass}
+                  - privkey: {privkey_nopass}
+                - __env__ {url}:
+                  - mountpoint: nowhere
+                  - fallback: dev
+                  - pubkey: {pubkey_nopass}
+                  - privkey: {privkey_nopass}
+            ''')
+        self.assertEqual(ret, expected)
+
+        if grains['os_family'] == 'Debian':
+            # passphrase-protected currently does not work here
+            return
+
+        # Test with passphrase-protected key and global credential options
+        ret = self.get_pillar('''\
+            file_ignore_regex: []
+            file_ignore_glob: []
+            git_pillar_provider: pygit2
+            git_pillar_pubkey: {pubkey_withpass}
+            git_pillar_privkey: {privkey_withpass}
+            git_pillar_passphrase: {passphrase}
+            cachedir: {cachedir}
+            extension_modules: {extmods}
+            pillarenv: nonexisting
+            ext_pillar:
+              - git:
+                - __env__ {url_extra_repo}:
+                  - fallback: master
+                - __env__ {url}:
+                  - mountpoint: nowhere
+                  - fallback: dev
+            ''')
+        self.assertEqual(ret, expected)
+
+        # Test with passphrase-protected key and per-repo credential options
+        ret = self.get_pillar('''\
+            file_ignore_regex: []
+            file_ignore_glob: []
+            git_pillar_provider: pygit2
+            cachedir: {cachedir}
+            extension_modules: {extmods}
+            pillarenv: nonexisting
+            ext_pillar:
+              - git:
+                - __env__ {url_extra_repo}:
+                  - fallback: master
+                  - pubkey: {pubkey_nopass}
+                  - privkey: {privkey_nopass}
+                  - passphrase: {passphrase}
+                - __env__ {url}:
+                  - mountpoint: nowhere
+                  - fallback: dev
+                  - pubkey: {pubkey_nopass}
+                  - privkey: {privkey_nopass}
+                  - passphrase: {passphrase}
+            ''')
+        self.assertEqual(ret, expected)
+
+
+@skipIf(WAR_ROOM_SKIP, 'WAR ROOM TEMPORARY SKIP')
 @skipIf(NO_MOCK, NO_MOCK_REASON)
 @skipIf(_windows_or_mac(), 'minion is windows or mac')
 @skip_if_not_root
@@ -2119,7 +2383,64 @@ class TestPygit2HTTP(GitPillarHTTPTestBase):
                         'nested_dict': {'dev': True}}}
         )
 
+    def test_all_saltenvs_base(self):
+        '''
+        Test all_saltenvs parameter with base pillarenv.
+        '''
+        ret = self.get_pillar('''\
+            file_ignore_regex: []
+            file_ignore_glob: []
+            git_pillar_provider: pygit2
+            cachedir: {cachedir}
+            extension_modules: {extmods}
+            ext_pillar:
+              - git:
+                - __env__ {url_extra_repo}:
+                  - all_saltenvs: master
+                - __env__ {url}:
+                  - mountpoint: nowhere
+            ''')
+        self.assertEqual(
+            ret,
+            {'branch': 'master',
+             'motd': 'The force will be with you. Always.',
+             'mylist': ['master'],
+             'mydict': {'master': True,
+                        'nested_list': ['master'],
+                        'nested_dict': {'master': True}}}
+        )
 
+    def test_fallback(self):
+        '''
+        Test fallback parameter.
+        '''
+        ret = self.get_pillar('''\
+            file_ignore_regex: []
+            file_ignore_glob: []
+            git_pillar_provider: pygit2
+            cachedir: {cachedir}
+            extension_modules: {extmods}
+            pillarenv: nonexisting
+            ext_pillar:
+              - git:
+                - __env__ {url_extra_repo}:
+                  - fallback: master
+                - __env__ {url}:
+                  - mountpoint: nowhere
+                  - fallback: dev
+            ''')
+        self.assertEqual(
+            ret,
+            {'branch': 'dev',
+             'motd': 'The force will be with you. Always.',
+             'mylist': ['dev'],
+             'mydict': {'dev': True,
+                        'nested_list': ['dev'],
+                        'nested_dict': {'dev': True}}}
+        )
+
+
+@skipIf(WAR_ROOM_SKIP, 'WAR ROOM TEMPORARY SKIP')
 @skipIf(NO_MOCK, NO_MOCK_REASON)
 @skipIf(_windows_or_mac(), 'minion is windows or mac')
 @skip_if_not_root
@@ -2709,6 +3030,68 @@ class TestPygit2AuthenticatedHTTP(GitPillarHTTPTestBase):
                   - all_saltenvs: master
                 - __env__ {url}:
                   - mountpoint: nowhere
+            ''')
+        self.assertEqual(
+            ret,
+            {'branch': 'dev',
+             'motd': 'The force will be with you. Always.',
+             'mylist': ['dev'],
+             'mydict': {'dev': True,
+                        'nested_list': ['dev'],
+                        'nested_dict': {'dev': True}}}
+        )
+
+    def test_all_saltenvs_base(self):
+        '''
+        Test all_saltenvs parameter with base pillarenv.
+        '''
+        ret = self.get_pillar('''\
+            file_ignore_regex: []
+            file_ignore_glob: []
+            git_pillar_provider: pygit2
+            git_pillar_user: {user}
+            git_pillar_password: {password}
+            git_pillar_insecure_auth: True
+            cachedir: {cachedir}
+            extension_modules: {extmods}
+            ext_pillar:
+              - git:
+                - __env__ {url_extra_repo}:
+                  - all_saltenvs: master
+                - __env__ {url}:
+                  - mountpoint: nowhere
+            ''')
+        self.assertEqual(
+            ret,
+            {'branch': 'master',
+             'motd': 'The force will be with you. Always.',
+             'mylist': ['master'],
+             'mydict': {'master': True,
+                        'nested_list': ['master'],
+                        'nested_dict': {'master': True}}}
+        )
+
+    def test_fallback(self):
+        '''
+        Test fallback parameter.
+        '''
+        ret = self.get_pillar('''\
+            file_ignore_regex: []
+            file_ignore_glob: []
+            git_pillar_provider: pygit2
+            git_pillar_user: {user}
+            git_pillar_password: {password}
+            git_pillar_insecure_auth: True
+            cachedir: {cachedir}
+            extension_modules: {extmods}
+            pillarenv: nonexisting
+            ext_pillar:
+              - git:
+                - __env__ {url_extra_repo}:
+                  - fallback: master
+                - __env__ {url}:
+                  - mountpoint: nowhere
+                  - fallback: dev
             ''')
         self.assertEqual(
             ret,

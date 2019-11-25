@@ -44,7 +44,6 @@ EXCLUDED_FILES = [
     os.path.join('tests', 'runtests.py'),
     os.path.join('tests', 'jenkins.py'),
     os.path.join('tests', 'salt-tcpdump.py'),
-    os.path.join('tests', 'conftest.py'),
     os.path.join('tests', 'packdump.py'),
     os.path.join('tests', 'consist.py'),
     os.path.join('tests', 'modparser.py'),
@@ -80,7 +79,7 @@ class BadTestModuleNamesTestCase(TestCase):
                     or reldir.endswith('__pycache__'):
                 continue
             for fname in files:
-                if fname == '__init__.py' or not fname.endswith('.py'):
+                if fname in ('__init__.py', 'conftest.py') or not fname.endswith('.py'):
                     continue
                 relpath = os.path.join(reldir, fname)
                 if relpath in EXCLUDED_FILES:
@@ -135,6 +134,7 @@ class BadTestModuleNamesTestCase(TestCase):
             'integration.logging.test_jid_logging',
             'integration.minion.test_blackout',
             'integration.minion.test_pillar',
+            'integration.minion.test_executor',
             'integration.minion.test_timeout',
             'integration.modules.test_decorators',
             'integration.modules.test_pkg',
@@ -144,6 +144,7 @@ class BadTestModuleNamesTestCase(TestCase):
             'integration.netapi.rest_tornado.test_app',
             'integration.netapi.rest_cherrypy.test_app_pam',
             'integration.output.test_output',
+            'integration.pillar.test_pillar_include',
             'integration.proxy.test_shell',
             'integration.proxy.test_simple',
             'integration.reactor.test_reactor',

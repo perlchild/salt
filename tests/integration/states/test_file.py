@@ -22,9 +22,8 @@ log = logging.getLogger(__name__)
 # Import Salt Testing libs
 from tests.support.runtests import RUNTIME_VARS
 from tests.support.case import ModuleCase
-from tests.support.unit import skipIf
+from tests.support.unit import skipIf, WAR_ROOM_SKIP
 from tests.support.helpers import (
-    destructiveTest,
     skip_if_not_root,
     with_system_user_and_group,
     with_tempdir,
@@ -42,6 +41,7 @@ import salt.utils.json
 import salt.utils.path
 import salt.utils.platform
 import salt.utils.stringutils
+import salt.serializers.configparser
 from salt.utils.versions import LooseVersion as _LooseVersion
 
 HAS_PWD = True
@@ -130,6 +130,7 @@ def _test_managed_file_mode_keep_helper(testcase, local=False):
         os.chmod(grail_fs_path, grail_fs_mode)
 
 
+@skipIf(WAR_ROOM_SKIP, 'WAR ROOM TEMPORARY SKIP')
 class FileTest(ModuleCase, SaltReturnAssertsMixin):
     '''
     Validate the file state
@@ -457,6 +458,21 @@ class FileTest(ModuleCase, SaltReturnAssertsMixin):
         changes = next(six.itervalues(ret))['changes']
         self.assertEqual('<show_changes=False>', changes['diff'])
 
+    def test_managed_show_changes_true(self):
+        '''
+        file.managed test interface
+        '''
+        name = os.path.join(RUNTIME_VARS.TMP, 'grail_not_scene33')
+        with salt.utils.files.fopen(name, 'wb') as fp_:
+            fp_.write(b'test_managed_show_changes_false\n')
+
+        ret = self.run_state(
+            'file.managed', name=name, source='salt://grail/scene33',
+        )
+
+        changes = next(six.itervalues(ret))['changes']
+        self.assertIn('diff', changes)
+
     @skipIf(IS_WINDOWS, 'Don\'t know how to fix for Windows')
     def test_managed_escaped_file_path(self):
         '''
@@ -541,13 +557,16 @@ class FileTest(ModuleCase, SaltReturnAssertsMixin):
                     '''.format(**managed_files)))
 
             ret = self.run_function('state.sls', [state_name])
+            self.assertSaltTrueReturn(ret)
             for typ in state_keys:
                 self.assertTrue(ret[state_keys[typ]]['result'])
                 self.assertIn('diff', ret[state_keys[typ]]['changes'])
         finally:
-            os.remove(state_file)
+            if os.path.exists(state_file):
+                os.remove(state_file)
             for typ in managed_files:
-                os.remove(managed_files[typ])
+                if os.path.exists(managed_files[typ]):
+                    os.remove(managed_files[typ])
 
     @skip_if_not_root
     @skipIf(IS_WINDOWS, 'Windows does not support "mode" kwarg. Skipping.')
@@ -922,10 +941,7 @@ class FileTest(ModuleCase, SaltReturnAssertsMixin):
             tmp_dir = os.path.join(RUNTIME_VARS.TMP, 'pgdata')
             sym_dir = os.path.join(RUNTIME_VARS.TMP, 'pg_data')
 
-            if IS_WINDOWS:
-                self.run_function('file.mkdir', [tmp_dir, 'Administrators'])
-            else:
-                os.mkdir(tmp_dir, 0o700)
+            os.mkdir(tmp_dir, 0o700)
 
             self.run_function('file.symlink', [tmp_dir, sym_dir])
 
@@ -945,7 +961,7 @@ class FileTest(ModuleCase, SaltReturnAssertsMixin):
                 self.run_function('file.remove', [sym_dir])
 
     @skip_if_not_root
-    @skipIf(IS_WINDOWS, 'Mode not available in Windows')
+    @skipIf(IS_WINDOWS, 'Windows does not support "mode" kwarg. Skipping.')
     def test_directory_max_depth(self):
         '''
         file.directory
@@ -1226,6 +1242,7 @@ class FileTest(ModuleCase, SaltReturnAssertsMixin):
         self.assertTrue(os.path.exists(good_file))
         self.assertFalse(os.path.exists(wrong_file))
 
+    @skipIf(WAR_ROOM_SKIP, 'WAR ROOM TEMPORARY SKIP')
     def test_directory_broken_symlink(self):
         '''
         Ensure that file.directory works even if a directory
@@ -1236,20 +1253,17 @@ class FileTest(ModuleCase, SaltReturnAssertsMixin):
             null_file = '{0}/null'.format(tmp_dir)
             broken_link = '{0}/broken'.format(tmp_dir)
 
-            if IS_WINDOWS:
-                self.run_function('file.mkdir', [tmp_dir, 'Administrators'])
-            else:
-                os.mkdir(tmp_dir, 0o700)
+            os.mkdir(tmp_dir, 0o700)
 
             self.run_function('file.symlink', [null_file, broken_link])
 
             if IS_WINDOWS:
                 ret = self.run_state(
-                    'file.directory', name=tmp_dir, recurse={'mode'},
+                    'file.directory', name=tmp_dir, recurse=['mode'],
                     follow_symlinks=True, win_owner='Administrators')
             else:
                 ret = self.run_state(
-                    'file.directory', name=tmp_dir, recurse={'mode'},
+                    'file.directory', name=tmp_dir, recurse=['mode'],
                     file_mode=644, dir_mode=755)
 
             self.assertSaltTrueReturn(ret)
@@ -1752,7 +1766,7 @@ class FileTest(ModuleCase, SaltReturnAssertsMixin):
         with salt.utils.files.fopen(path_test, 'rb') as fp_:
             serialized_file = salt.utils.stringutils.to_unicode(fp_.read())
 
-        # The JSON serializer uses LF even on OSes where os.path.sep is CRLF.
+        # The JSON serializer uses LF even on OSes where os.sep is CRLF.
         expected_file = '\n'.join([
             '{',
             '  "a_list": [',
@@ -1772,16 +1786,16 @@ class FileTest(ModuleCase, SaltReturnAssertsMixin):
         '''
         Test the serializer_opts and deserializer_opts options
         '''
-        data1 = {'foo': {'bar': 'baz'}}
+        data1 = {'foo': {'bar': '%(x)s'}}
         data2 = {'foo': {'abc': 123}}
-        merged = {'foo': {'bar': 'baz', 'abc': 123}}
+        merged = {'foo': {'y': 'not_used', 'x': 'baz', 'abc': 123, 'bar': u'baz'}}
 
         ret = self.run_state(
             'file.serialize',
             name=name,
             dataset=data1,
-            formatter='json',
-            deserializer_opts=[{'encoding': 'latin-1'}])
+            formatter='configparser',
+            deserializer_opts=[{'defaults': {'y': 'not_used'}}])
         ret = ret[next(iter(ret))]
         assert ret['result'], ret
         # We should have warned about deserializer_opts being used when
@@ -1789,25 +1803,31 @@ class FileTest(ModuleCase, SaltReturnAssertsMixin):
         assert 'warnings' in ret
 
         # Run with merge_if_exists, as well as serializer and deserializer opts
+        # deserializer opts will be used for string interpolation of the %(x)s
+        # that was written to the file with data1 (i.e. bar should become baz)
         ret = self.run_state(
             'file.serialize',
             name=name,
             dataset=data2,
-            formatter='json',
+            formatter='configparser',
             merge_if_exists=True,
-            serializer_opts=[{'indent': 8}],
-            deserializer_opts=[{'encoding': 'latin-1'}])
+            serializer_opts=[{'defaults': {'y': 'not_used'}}],
+            deserializer_opts=[{'defaults': {'x': 'baz'}}])
         ret = ret[next(iter(ret))]
         assert ret['result'], ret
 
         with salt.utils.files.fopen(name) as fp_:
-            serialized_data = salt.utils.json.load(fp_)
+            serialized_data = salt.serializers.configparser.deserialize(fp_)
 
         # If this test fails, this debug logging will help tell us how the
         # serialized data differs from what was serialized.
         log.debug('serialized_data = %r', serialized_data)
         log.debug('merged = %r', merged)
-        assert serialized_data == merged
+        # serializing with a default of 'y' will add y = not_used into foo
+        assert serialized_data['foo']['y'] == merged['foo']['y']
+        # deserializing with default of x = baz will perform interpolation on %(x)s
+        # and bar will then = baz
+        assert serialized_data['foo']['bar'] == merged['foo']['bar']
 
     @with_tempdir()
     def test_replace_issue_18841_omit_backup(self, base_dir):
@@ -2453,6 +2473,7 @@ class FileTest(ModuleCase, SaltReturnAssertsMixin):
                 pass
 
     @skip_if_not_root
+    @skipIf(IS_WINDOWS, 'Mode not available in Windows')
     @skipIf(not HAS_PWD, "pwd not available. Skipping test")
     @skipIf(not HAS_GRP, "grp not available. Skipping test")
     @with_system_user_and_group('user12209', 'group12209',
@@ -2489,6 +2510,7 @@ class FileTest(ModuleCase, SaltReturnAssertsMixin):
             self.assertEqual(grp.getgrgid(twostats.st_gid).gr_name, root_group)
 
     @skip_if_not_root
+    @skipIf(IS_WINDOWS, 'Mode not available in Windows')
     @skipIf(not HAS_PWD, "pwd not available. Skipping test")
     @skipIf(not HAS_GRP, "grp not available. Skipping test")
     @with_system_user_and_group('user12209', 'group12209',
@@ -2591,15 +2613,19 @@ class FileTest(ModuleCase, SaltReturnAssertsMixin):
 
         user = 'salt'
         mode = '0644'
-        self.run_function('user.add', [user])
+        ret = self.run_function('user.add', [user])
+        self.assertTrue(ret, 'Failed to add user. Are you running as sudo?')
         ret = self.run_state('file.copy', name=dest, source=source, user=user,
-                             makedirs=True, mode=mode)
-        file_checks = [dest, os.path.join(RUNTIME_VARS.TMP, 'dir1'), os.path.join(RUNTIME_VARS.TMP, 'dir1', 'dir2')]
+                              makedirs=True, mode=mode)
+        self.assertSaltTrueReturn(ret)
+        file_checks = [dest,
+                       os.path.join(RUNTIME_VARS.TMP, 'dir1'),
+                       os.path.join(RUNTIME_VARS.TMP, 'dir1', 'dir2')]
         for check in file_checks:
             user_check = self.run_function('file.get_user', [check])
             mode_check = self.run_function('file.get_mode', [check])
-            assert user_check == user
-            assert salt.utils.files.normalize_mode(mode_check) == mode
+            self.assertEqual(user_check, user)
+            self.assertEqual(salt.utils.files.normalize_mode(mode_check), mode)
 
     def test_contents_pillar_with_pillar_list(self):
         '''
@@ -2612,6 +2638,7 @@ class FileTest(ModuleCase, SaltReturnAssertsMixin):
         self.assertSaltTrueReturn(ret)
 
     @skip_if_not_root
+    @skipIf(IS_WINDOWS, 'Mode not available in Windows')
     @skipIf(not HAS_PWD, "pwd not available. Skipping test")
     @skipIf(not HAS_GRP, "grp not available. Skipping test")
     @with_system_user_and_group('test_setuid_user', 'test_setuid_group',
@@ -2669,6 +2696,7 @@ class FileTest(ModuleCase, SaltReturnAssertsMixin):
                 pass
 
     @skip_if_not_root
+    @skipIf(IS_WINDOWS, 'Mode not available in Windows')
     @skipIf(not HAS_PWD, "pwd not available. Skipping test")
     @skipIf(not HAS_GRP, "grp not available. Skipping test")
     @with_system_user_and_group('user12209', 'group12209',
@@ -2789,6 +2817,7 @@ class FileTest(ModuleCase, SaltReturnAssertsMixin):
 
         self.assertSaltTrueReturn(ret)
 
+    @skipIf(WAR_ROOM_SKIP, 'WAR ROOM TEMPORARY SKIP')
     @with_tempfile()
     def test_issue_50221(self, name):
         expected = 'abc{0}{0}{0}'.format(os.linesep)
@@ -2826,6 +2855,7 @@ class FileTest(ModuleCase, SaltReturnAssertsMixin):
         self.assertSaltTrueReturn(ret)
 
 
+@skipIf(True, 'WAR ROOM TEMPORARY SKIP')
 class BlockreplaceTest(ModuleCase, SaltReturnAssertsMixin):
     marker_start = '# start'
     marker_end = '# end'
@@ -4077,7 +4107,7 @@ class RemoteFileTest(ModuleCase, SaltReturnAssertsMixin):
             os.remove(self.name)
         except OSError as exc:
             if exc.errno != errno.ENOENT:
-                raise exc
+                six.reraise(*sys.exc_info())
 
     def run_state(self, *args, **kwargs):
         ret = super(RemoteFileTest, self).run_state(*args, **kwargs)
@@ -4135,6 +4165,7 @@ class RemoteFileTest(ModuleCase, SaltReturnAssertsMixin):
         assert result == '', 'File is still cached at {0}'.format(result)
 
 
+@skipIf(WAR_ROOM_SKIP, 'WAR ROOM TEMPORARY SKIP')
 @skipIf(not salt.utils.path.which('patch'), 'patch is not installed')
 class PatchTest(ModuleCase, SaltReturnAssertsMixin):
     def _check_patch_version(self, min_version):

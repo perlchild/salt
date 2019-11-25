@@ -5,15 +5,16 @@ from __future__ import absolute_import
 
 # Import Salt Testing libs
 from tests.support.case import ModuleCase
-from tests.support.unit import skipIf
+from tests.support.unit import skipIf, WAR_ROOM_SKIP
 
 # Import Salt Libs
 import salt.utils.path
 import salt.utils.platform
 
-URL = 'repo.saltstack.com'
+URL = 'google-public-dns-a.google.com'
 
 
+@skipIf(WAR_ROOM_SKIP, 'WAR ROOM TEMPORARY SKIP')
 class NetworkTest(ModuleCase):
     '''
     Validate network module

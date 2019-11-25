@@ -861,6 +861,7 @@ deep_init_base = '''
 from __future__ import absolute_import
 import {0}.top_lib
 import {0}.top_lib.mid_lib
+from tests.support.unit import skipIf, WAR_ROOM_SKIP; skipIf(WAR_ROOM_SKIP, 'WAR ROOM TEMPORARY SKIP')  # pylint: disable=C0321,E8702
 import {0}.top_lib.mid_lib.bot_lib
 
 def top():
@@ -1001,25 +1002,25 @@ class LoaderGlobalsTest(ModuleCase):
         Verify that the globals listed in the doc string (from the test) are in these modules
         '''
         # find the globals
-        global_vars = []
+        global_vars = {}
         for val in six.itervalues(mod_dict):
             # only find salty globals
             if val.__module__.startswith('salt.loaded'):
                 if hasattr(val, '__globals__'):
-                    if '__wrapped__' in val.__globals__:
-                        global_vars.append(sys.modules[val.__module__].__dict__)
+                    if hasattr(val, '__wrapped__') or '__wrapped__' in val.__globals__:
+                        global_vars[val.__module__] = sys.modules[val.__module__].__dict__
                     else:
-                        global_vars.append(val.__globals__)
+                        global_vars[val.__module__] = val.__globals__
 
         # if we couldn't find any, then we have no modules -- so something is broken
-        self.assertNotEqual(global_vars, [], msg='No modules were loaded.')
+        self.assertNotEqual(global_vars, {}, msg='No modules were loaded.')
 
         # get the names of the globals you should have
         func_name = inspect.stack()[1][3]
         names = next(six.itervalues(salt.utils.yaml.safe_load(getattr(self, func_name).__doc__)))
 
         # Now, test each module!
-        for item in global_vars:
+        for item in six.itervalues(global_vars):
             for name in names:
                 self.assertIn(name, list(item.keys()))
 

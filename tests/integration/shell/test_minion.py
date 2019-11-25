@@ -21,7 +21,7 @@ import logging
 import tests.integration.utils
 from tests.support.runtests import RUNTIME_VARS
 from tests.support.case import ShellCase
-from tests.support.unit import skipIf
+from tests.support.unit import skipIf, WAR_ROOM_SKIP
 from tests.support.mixins import ShellCaseCommonTestsMixin
 from tests.integration.utils import testprogram
 
@@ -38,6 +38,7 @@ log = logging.getLogger(__name__)
 DEBUG = True
 
 
+@skipIf(WAR_ROOM_SKIP, 'WAR ROOM TEMPORARY SKIP')
 class MinionTest(ShellCase, testprogram.TestProgramCase, ShellCaseCommonTestsMixin):
     '''
     Various integration tests for the salt-minion executable.
@@ -49,6 +50,7 @@ class MinionTest(ShellCase, testprogram.TestProgramCase, ShellCaseCommonTestsMix
         'subminion',
     )
 
+    @skipIf(salt.utils.platform.is_darwin(), 'Test is flaky on macosx')
     def test_issue_7754(self):
         old_cwd = os.getcwd()
         config_dir = os.path.join(RUNTIME_VARS.TMP, 'issue-7754')
@@ -62,6 +64,7 @@ class MinionTest(ShellCase, testprogram.TestProgramCase, ShellCaseCommonTestsMix
         with salt.utils.files.fopen(self.get_config_file_path(config_file_name), 'r') as fhr:
             config = salt.utils.yaml.safe_load(fhr)
             config['log_file'] = 'file:///tmp/log/LOG_LOCAL3'
+            config['id'] = 'issue-7754'
 
             with salt.utils.files.fopen(os.path.join(config_dir, config_file_name), 'w') as fhw:
                 salt.utils.yaml.safe_dump(config, fhw, default_flow_style=False)

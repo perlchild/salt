@@ -10,15 +10,15 @@
 # Import python libs
 from __future__ import absolute_import
 import os
-import signal
 import shutil
 import logging
+from collections import OrderedDict
 
 # Import Salt Testing libs
 from tests.support.runtests import RUNTIME_VARS
 from tests.support.case import ShellCase
 from tests.support.mixins import ShellCaseCommonTestsMixin
-from tests.support.unit import skipIf
+from tests.support.unit import skipIf, WAR_ROOM_SKIP
 from tests.integration.utils import testprogram
 
 # Import salt libs
@@ -27,12 +27,33 @@ import salt.utils.yaml
 import salt.utils.platform
 
 # Import 3rd-party libs
+import psutil
 import pytest
 
 log = logging.getLogger(__name__)
 
+SIGKILL = 9
 
-@pytest.mark.usefixtures('session_salt_syndic')
+
+@pytest.fixture(scope='module', autouse=True)
+def session_salt_syndic(request, session_salt_master_of_masters, session_salt_syndic):
+    request.session.stats_processes.update(OrderedDict((
+        ('Salt Syndic Master', psutil.Process(session_salt_master_of_masters.pid)),
+        ('       Salt Syndic', psutil.Process(session_salt_syndic.pid)),
+    )).items())
+    yield session_salt_syndic
+    request.session.stats_processes.pop('Salt Syndic Master')
+    request.session.stats_processes.pop('       Salt Syndic')
+
+    # Stop daemons now(they would be stopped at the end of the test run session
+    for daemon in (session_salt_syndic, session_salt_master_of_masters):
+        try:
+            daemon.terminate()
+        except Exception as exc:  # pylint: disable=broad-except
+            log.warning('Failed to terminate daemon: %s', daemon.__class__.__name__)
+
+
+@skipIf(WAR_ROOM_SKIP, 'WAR ROOM TEMPORARY SKIP')
 class SyndicTest(ShellCase, testprogram.TestProgramCase, ShellCaseCommonTestsMixin):
     '''
     Test the salt-syndic command
@@ -40,6 +61,7 @@ class SyndicTest(ShellCase, testprogram.TestProgramCase, ShellCaseCommonTestsMix
 
     _call_binary_ = 'salt-syndic'
 
+    @skipIf(WAR_ROOM_SKIP, 'WAR ROOM TEMPORARY SKIP')
     def test_issue_7754(self):
         old_cwd = os.getcwd()
         config_dir = os.path.join(RUNTIME_VARS.TMP, 'issue-7754')
@@ -76,7 +98,7 @@ class SyndicTest(ShellCase, testprogram.TestProgramCase, ShellCaseCommonTestsMix
         if os.path.exists(pid_path):
             with salt.utils.files.fopen(pid_path) as fhr:
                 try:
-                    os.kill(int(fhr.read()), signal.SIGKILL)
+                    os.kill(int(fhr.read()), SIGKILL)
                 except OSError:
                     pass
         try:

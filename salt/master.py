@@ -983,7 +983,6 @@ class MWorker(salt.utils.process.SignalHandlingMultiprocessingProcess):
         self.mkey = mkey
         self.key = key
         self.k_mtime = 0
-        self.stats = collections.defaultdict(lambda: {'mean': 0, 'latency': 0, 'runs': 0})
         self.stat_clock = time.time()
 
     # We need __setstate__ and __getstate__ to also pickle 'SMaster.secrets'.
@@ -2036,7 +2035,7 @@ class ClearFuncs(object):
             return False
         return self.loadauth.get_tok(clear_load['token'])
 
-    def publish_batch(self, clear_load, minions, missing):
+    def publish_batch(self, clear_load, extra, minions, missing):
         batch_load = {}
         batch_load.update(clear_load)
         import salt.cli.batch_async
@@ -2046,6 +2045,9 @@ class ClearFuncs(object):
             batch_load
         )
         ioloop = tornado.ioloop.IOLoop.current()
+
+        self._prep_pub(minions, batch.batch_jid, clear_load, extra, missing)
+
         ioloop.add_callback(batch.start)
 
         return {
@@ -2149,7 +2151,7 @@ class ClearFuncs(object):
                     }
                 }
         if extra.get('batch', None):
-            return self.publish_batch(clear_load, minions, missing)
+            return self.publish_batch(clear_load, extra, minions, missing)
 
         jid = self._prep_jid(clear_load, extra)
         if jid is None:

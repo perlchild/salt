@@ -178,7 +178,9 @@ LOGGING_STORE_HANDLER = __StoreLoggingHandler()
 
 
 class SaltLogQueueHandler(QueueHandler):
-    pass
+    '''
+    Subclassed just to differentiate when debugging
+    '''
 
 
 class SaltLogRecord(logging.LogRecord):
@@ -360,11 +362,14 @@ class SaltLoggingClass(six.with_metaclass(LoggingMixInMeta, LOGGING_LOGGER_CLASS
             extra = None
 
         # Let's try to make every logging message unicode
-        salt_system_encoding = __salt_system_encoding__
-        if salt_system_encoding == 'ascii':
-            # Encoding detection most likely failed, let's use the utf-8
-            # value which we defaulted before __salt_system_encoding__ was
-            # implemented
+        try:
+            salt_system_encoding = __salt_system_encoding__
+            if salt_system_encoding == 'ascii':
+                # Encoding detection most likely failed, let's use the utf-8
+                # value which we defaulted before __salt_system_encoding__ was
+                # implemented
+                salt_system_encoding = 'utf-8'
+        except NameError:
             salt_system_encoding = 'utf-8'
 
         if isinstance(msg, six.string_types) \
@@ -826,13 +831,17 @@ def setup_extended_logging(opts):
 
 def get_multiprocessing_logging_queue():
     global __MP_LOGGING_QUEUE
+    from salt.utils.platform import is_darwin
 
     if __MP_IN_MAINPROCESS is False:
         # We're not in the MainProcess, return! No Queue shall be instantiated
         return __MP_LOGGING_QUEUE
 
     if __MP_LOGGING_QUEUE is None:
-        __MP_LOGGING_QUEUE = multiprocessing.Queue()
+        if is_darwin():
+            __MP_LOGGING_QUEUE = multiprocessing.Queue(32767)
+        else:
+            __MP_LOGGING_QUEUE = multiprocessing.Queue(100000)
     return __MP_LOGGING_QUEUE
 
 

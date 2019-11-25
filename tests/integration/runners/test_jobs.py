@@ -7,13 +7,14 @@ from __future__ import absolute_import, print_function, unicode_literals
 
 # Import Salt Testing libs
 from tests.support.case import ShellCase
-from tests.support.unit import skipIf
+from tests.support.unit import skipIf, WAR_ROOM_SKIP
 
 
 class ManageTest(ShellCase):
     '''
     Test the manage runner
     '''
+    @skipIf(WAR_ROOM_SKIP, 'WAR ROOM TEMPORARY SKIP')
     def test_active(self):
         '''
         jobs.active
@@ -36,7 +37,7 @@ class ManageTest(ShellCase):
         '''
         ret = self.run_run_plus('jobs.lookup_jid')
         expected = 'Passed invalid arguments:'
-        self.assertIn(expected, ret['return'])
+        self.assertRaises(TypeError, expected)
 
     @skipIf(True, 'to be re-enabled when #23623 is merged')
     def test_list_jobs(self):

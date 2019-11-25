@@ -1,15 +1,14 @@
 # -*- coding: utf-8 -*-
 '''
-    :codeauthor: Pedro Algarvio (pedro@algarvio.me)
-
-    tests.integration.modules.pip
-    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+tests.integration.modules.pip
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 '''
 
 # Import python libs
 from __future__ import absolute_import, print_function, unicode_literals
 import os
 import re
+import sys
 import shutil
 import tempfile
 
@@ -17,24 +16,60 @@ import tempfile
 from tests.support.runtests import RUNTIME_VARS
 from tests.support.case import ModuleCase
 from tests.support.unit import skipIf
-from tests.support.helpers import skip_if_not_root, patched_environ
+from tests.support.helpers import patched_environ
 
 # Import salt libs
 import salt.utils.files
 import salt.utils.path
 import salt.utils.platform
+from salt.ext.six import PY3
 from salt.modules.virtualenv_mod import KNOWN_BINARY_NAMES
 
 
-@skipIf(salt.utils.path.which_bin(KNOWN_BINARY_NAMES) is None, 'virtualenv not installed')
 class PipModuleTest(ModuleCase):
-
+    '''
+    These tests don't require the overhead of an environment being set up and torn down for them
+    '''
     def setUp(self):
         super(PipModuleTest, self).setUp()
 
+        # Restore the environ
+        def cleanup_environ(environ):
+            os.environ.clear()
+            os.environ.update(environ)
+
+        self.addCleanup(cleanup_environ, os.environ.copy())
+
+    def test_issue_2087_missing_pip(self):
+        # Run a pip depending functions with a non existent pip binary
+        for func in ('pip.freeze', 'pip.list'):
+            ret = self.run_function(func, bin_env=os.path.join(RUNTIME_VARS.TMP, 'no_pip'))
+            self.assertNotIsInstance(ret, list)
+            self.assertNotIsInstance(ret, dict)
+            self.assertIn('command required for \'{0}\' not found: '.format(func), ret.lower())
+            self.assertIn('could not find a pip binary', ret)
+
+
+@skipIf(not salt.utils.path.which_bin(KNOWN_BINARY_NAMES), 'virtualenv not installed')
+class PipModuleVenvTest(ModuleCase):
+
+    def setUp(self):
+        super(PipModuleVenvTest, self).setUp()
+
+        # Restore the environ
+        def cleanup_environ(environ):
+            os.environ.clear()
+            os.environ.update(environ)
+
+        self.addCleanup(cleanup_environ, os.environ.copy())
+
         self.venv_test_dir = tempfile.mkdtemp(dir=RUNTIME_VARS.TMP)
+        # Remove the venv test directory
+        self.addCleanup(shutil.rmtree, self.venv_test_dir, ignore_errors=True)
         self.venv_dir = os.path.join(self.venv_test_dir, 'venv')
         self.pip_temp = os.path.join(self.venv_test_dir, '.pip-temp')
+        # Remove the pip-temp directory
+        self.addCleanup(shutil.rmtree, self.pip_temp, ignore_errors=True)
         if not os.path.isdir(self.pip_temp):
             os.makedirs(self.pip_temp)
         self.patched_environ = patched_environ(
@@ -44,81 +79,63 @@ class PipModuleTest(ModuleCase):
         )
         self.patched_environ.__enter__()
         self.addCleanup(self.patched_environ.__exit__)
+        for item in ('venv_dir', 'venv_test_dir', 'pip_temp'):
+            self.addCleanup(delattr, self, item)
 
-    def tearDown(self):
-        super(PipModuleTest, self).tearDown()
-        if os.path.isdir(self.venv_test_dir):
-            shutil.rmtree(self.venv_test_dir, ignore_errors=True)
-        if os.path.isdir(self.pip_temp):
-            shutil.rmtree(self.pip_temp, ignore_errors=True)
-        del self.venv_dir
-        del self.venv_test_dir
-        del self.pip_temp
-        if 'PIP_SOURCE_DIR' in os.environ:
-            os.environ.pop('PIP_SOURCE_DIR')
-        if 'PIP_BUILD_DIR' in os.environ:
-            os.environ.pop('PIP_BUILD_DIR')
-
-    def _check_download_error(self, ret):
+    @property
+    def venv_kwargs(self):
         '''
-        Checks to see if a download error looks transitory
-        '''
-        return any(w in ret for w in ['URLError', 'Download error'])
+        venv_kwargs only needs to be calculated once since it will be the same for every test
 
-    def pip_successful_install(self, target, expect=('irc3-plugins-test', 'pep8',)):
+        The reason why the virtualenv creation is proxied by this function is mostly
+        because under windows, we can't seem to properly create a virtualenv off of
+        another virtualenv(we can on linux) and also because, we really don't want to
+        test virtualenv creation off of another virtualenv, we want a virtualenv created
+        from the original python.
+        Also, on windows, we must also point to the virtualenv binary outside the existing
+        virtualenv because it will fail otherwise
+        '''
+        if not hasattr(self, '_venv_kwargs'):
+            # Default to the system python
+            self._venv_kwargs = {}
+            if hasattr(sys, 'real_prefix'):
+                if salt.utils.platform.is_windows():
+                    python = os.path.join(sys.real_prefix, os.path.basename(sys.executable))
+                else:
+                    python = os.path.join(sys.real_prefix, 'bin', os.path.basename(sys.executable))
+                # We're running off a virtualenv, and we don't want to create a virtualenv off of a virtualenv
+
+                # pyvenv-3.4 does not support the --python option
+                if not salt.utils.path.which('pyvenv-3.4'):
+                    self._venv_kwargs = {'python': python}
+        return self._venv_kwargs.copy()
+
+    def _create_virtualenv(self, path):
+        ret = self.run_function('virtualenv.create', [path], **self.venv_kwargs)
+        self.assertCmdSuccess(ret)
+
+    def assertCmdSuccess(self, ret):
+        self.assertIsInstance(ret, dict, ret)
+        self.assertEqual(ret.get('retcode', None), 0, ret)
+
+    def assertPipInstall(self, target, expect=('irc3-plugins-test', 'pep8')):
         '''
         isolate regex for extracting `successful install` message from pip
         '''
-
-        expect = set(expect)
-        expect_str = '|'.join(expect)
+        if isinstance(target, dict):
+            target = target.get('stdout', '')
 
         success = re.search(
             r'^.*Successfully installed\s([^\n]+)(?:Clean.*)?',
             target,
             re.M | re.S)
+        self.assertTrue(success)
 
-        success_for = re.findall(
-            r'({0})(?:-(?:[\d\.-]))?'.format(expect_str),
-            success.groups()[0]
-        ) if success else []
+        for ex in expect:
+            self.assertIn(ex, success.group(0))
 
-        return expect.issubset(set(success_for))
-
-    def test_issue_2087_missing_pip(self):
-        # Let's create the testing virtualenv
-        self.run_function('virtualenv.create', [self.venv_dir])
-
-        # Let's remove the pip binary
-        pip_bin = os.path.join(self.venv_dir, 'bin', 'pip')
-        site_dir = self.run_function('virtualenv.get_distribution_path', [self.venv_dir, 'pip'])
-        if salt.utils.platform.is_windows():
-            pip_bin = os.path.join(self.venv_dir, 'Scripts', 'pip.exe')
-            site_dir = os.path.join(self.venv_dir, 'lib', 'site-packages')
-        if not os.path.isfile(pip_bin):
-            self.skipTest(
-                'Failed to find the pip binary to the test virtualenv'
-            )
-        os.remove(pip_bin)
-
-        # Also remove the pip dir from site-packages
-        # This is needed now that we're using python -m pip instead of the
-        # pip binary directly. python -m pip will still work even if the
-        # pip binary is missing
-        shutil.rmtree(os.path.join(site_dir, 'pip'))
-
-        # Let's run a pip depending functions
-        for func in ('pip.freeze', 'pip.list'):
-            ret = self.run_function(func, bin_env=self.venv_dir)
-            self.assertIn(
-                'Command required for \'{0}\' not found: '
-                'Could not find a `pip` binary'.format(func),
-                ret
-            )
-
-    @skip_if_not_root
     def test_requirements_as_list_of_chains__cwd_set__absolute_file_path(self):
-        self.run_function('virtualenv.create', [self.venv_dir])
+        self._create_virtualenv(self.venv_dir)
 
         # Create a requirements file that depends on another one.
 
@@ -142,20 +159,10 @@ class PipModuleTest(ModuleCase):
             'pip.install', requirements=requirements_list,
             bin_env=self.venv_dir, cwd=self.venv_dir
         )
-        try:
-            self.assertEqual(ret['retcode'], 0)
+        self.assertPipInstall(ret)
 
-            found = self.pip_successful_install(ret['stdout'])
-
-            self.assertTrue(found)
-        except (AssertionError, TypeError):
-            import pprint
-            pprint.pprint(ret)
-            raise
-
-    @skip_if_not_root
     def test_requirements_as_list_of_chains__cwd_not_set__absolute_file_path(self):
-        self.run_function('virtualenv.create', [self.venv_dir])
+        self._create_virtualenv(self.venv_dir)
 
         # Create a requirements file that depends on another one.
 
@@ -178,21 +185,12 @@ class PipModuleTest(ModuleCase):
         ret = self.run_function(
             'pip.install', requirements=requirements_list, bin_env=self.venv_dir
         )
-        try:
-            self.assertEqual(ret['retcode'], 0)
 
-            found = self.pip_successful_install(ret['stdout'])
+        self.assertCmdSuccess(ret)
+        self.assertPipInstall(ret)
 
-            self.assertTrue(found)
-
-        except (AssertionError, TypeError):
-            import pprint
-            pprint.pprint(ret)
-            raise
-
-    @skip_if_not_root
     def test_requirements_as_list__absolute_file_path(self):
-        self.run_function('virtualenv.create', [self.venv_dir])
+        self._create_virtualenv(self.venv_dir)
 
         req1_filename = os.path.join(self.venv_dir, 'requirements.txt')
         req2_filename = os.path.join(self.venv_dir, 'requirements2.txt')
@@ -208,20 +206,11 @@ class PipModuleTest(ModuleCase):
             'pip.install', requirements=requirements_list, bin_env=self.venv_dir
         )
 
-        found = self.pip_successful_install(ret['stdout'])
+        self.assertCmdSuccess(ret)
+        self.assertPipInstall(ret)
 
-        try:
-            self.assertEqual(ret['retcode'], 0)
-            self.assertTrue(found)
-
-        except (AssertionError, TypeError):
-            import pprint
-            pprint.pprint(ret)
-            raise
-
-    @skip_if_not_root
     def test_requirements_as_list__non_absolute_file_path(self):
-        self.run_function('virtualenv.create', [self.venv_dir])
+        self._create_virtualenv(self.venv_dir)
 
         # Create a requirements file that depends on another one.
 
@@ -243,20 +232,12 @@ class PipModuleTest(ModuleCase):
             'pip.install', requirements=requirements_list,
             bin_env=self.venv_dir, cwd=req_cwd
         )
-        try:
-            self.assertEqual(ret['retcode'], 0)
 
-            found = self.pip_successful_install(ret['stdout'])
-            self.assertTrue(found)
+        self.assertCmdSuccess(ret)
+        self.assertPipInstall(ret)
 
-        except (AssertionError, TypeError):
-            import pprint
-            pprint.pprint(ret)
-            raise
-
-    @skip_if_not_root
     def test_chained_requirements__absolute_file_path(self):
-        self.run_function('virtualenv.create', [self.venv_dir])
+        self._create_virtualenv(self.venv_dir)
 
         # Create a requirements file that depends on another one.
 
@@ -271,17 +252,12 @@ class PipModuleTest(ModuleCase):
         ret = self.run_function(
             'pip.install', requirements=req1_filename, bin_env=self.venv_dir
         )
-        try:
-            self.assertEqual(ret['retcode'], 0)
-            self.assertIn('installed pep8', ret['stdout'])
-        except (AssertionError, TypeError):
-            import pprint
-            pprint.pprint(ret)
-            raise
 
-    @skip_if_not_root
+        self.assertCmdSuccess(ret)
+        self.assertIn('installed pep8', ret['stdout'])
+
     def test_chained_requirements__non_absolute_file_path(self):
-        self.run_function('virtualenv.create', [self.venv_dir])
+        self._create_virtualenv(self.venv_dir)
 
         # Create a requirements file that depends on another one.
         req_basepath = (self.venv_dir)
@@ -301,17 +277,12 @@ class PipModuleTest(ModuleCase):
             'pip.install', requirements=req1_filename, cwd=req_basepath,
             bin_env=self.venv_dir
         )
-        try:
-            self.assertEqual(ret['retcode'], 0)
-            self.assertIn('installed pep8', ret['stdout'])
-        except (AssertionError, TypeError):
-            import pprint
-            pprint.pprint(ret)
-            raise
 
-    @skip_if_not_root
+        self.assertCmdSuccess(ret)
+        self.assertIn('installed pep8', ret['stdout'])
+
     def test_issue_4805_nested_requirements(self):
-        self.run_function('virtualenv.create', [self.venv_dir])
+        self._create_virtualenv(self.venv_dir)
 
         # Create a requirements file that depends on another one.
         req1_filename = os.path.join(self.venv_dir, 'requirements.txt')
@@ -323,50 +294,40 @@ class PipModuleTest(ModuleCase):
 
         ret = self.run_function(
             'pip.install', requirements=req1_filename, bin_env=self.venv_dir, timeout=300)
-        if self._check_download_error(ret['stdout']):
-            self.skipTest('Test skipped due to pip download error')
-        try:
-            self.assertEqual(ret['retcode'], 0)
-            self.assertIn('installed pep8', ret['stdout'])
-        except (AssertionError, TypeError):
-            import pprint
-            pprint.pprint(ret)
-            raise
+
+        self.assertCmdSuccess(ret)
+        self.assertNotIn('URLError', ret['stdout'])
+        self.assertNotIn('Download error', ret['stdout'])
+        self.assertIn('installed pep8', ret['stdout'])
 
     def test_pip_uninstall(self):
         # Let's create the testing virtualenv
-        self.run_function('virtualenv.create', [self.venv_dir])
+        self._create_virtualenv(self.venv_dir)
         ret = self.run_function('pip.install', ['pep8'], bin_env=self.venv_dir)
-        if self._check_download_error(ret['stdout']):
-            self.skipTest('Test skipped due to pip download error')
-        self.assertEqual(ret['retcode'], 0)
+
+        self.assertCmdSuccess(ret)
+        self.assertNotIn('URLError', ret['stdout'])
+        self.assertNotIn('Download error', ret['stdout'])
         self.assertIn('installed pep8', ret['stdout'])
+
         ret = self.run_function(
             'pip.uninstall', ['pep8'], bin_env=self.venv_dir
         )
-        try:
-            self.assertEqual(ret['retcode'], 0)
-            self.assertIn('uninstalled pep8', ret['stdout'])
-        except AssertionError:
-            import pprint
-            pprint.pprint(ret)
-            raise
+
+        self.assertCmdSuccess(ret)
+        self.assertIn('uninstalled pep8', ret['stdout'])
 
     def test_pip_install_upgrade(self):
         # Create the testing virtualenv
-        self.run_function('virtualenv.create', [self.venv_dir])
+        self._create_virtualenv(self.venv_dir)
         ret = self.run_function(
             'pip.install', ['pep8==1.3.4'], bin_env=self.venv_dir
         )
-        if self._check_download_error(ret['stdout']):
-            self.skipTest('Test skipped due to pip download error')
-        try:
-            self.assertEqual(ret['retcode'], 0)
-            self.assertIn('installed pep8', ret['stdout'])
-        except AssertionError:
-            import pprint
-            pprint.pprint(ret)
-            raise
+
+        self.assertCmdSuccess(ret)
+        self.assertNotIn('URLError', ret['stdout'])
+        self.assertNotIn('Download error', ret['stdout'])
+        self.assertIn('installed pep8', ret['stdout'])
 
         ret = self.run_function(
             'pip.install',
@@ -374,28 +335,20 @@ class PipModuleTest(ModuleCase):
             bin_env=self.venv_dir,
             upgrade=True
         )
-        if self._check_download_error(ret['stdout']):
-            self.skipTest('Test skipped due to pip download error')
-        try:
-            self.assertEqual(ret['retcode'], 0)
-            self.assertIn('installed pep8', ret['stdout'])
-        except AssertionError:
-            import pprint
-            pprint.pprint(ret)
-            raise
+
+        self.assertCmdSuccess(ret)
+        self.assertNotIn('URLError', ret['stdout'])
+        self.assertNotIn('Download error', ret['stdout'])
+        self.assertIn('installed pep8', ret['stdout'])
 
         ret = self.run_function(
             'pip.uninstall', ['pep8'], bin_env=self.venv_dir
         )
 
-        try:
-            self.assertEqual(ret['retcode'], 0)
-            self.assertIn('uninstalled pep8', ret['stdout'])
-        except AssertionError:
-            import pprint
-            pprint.pprint(ret)
-            raise
+        self.assertCmdSuccess(ret)
+        self.assertIn('uninstalled pep8', ret['stdout'])
 
+    @skipIf(PY3, 'WAR ROOM TEMPORARY SKIP')
     def test_pip_install_multiple_editables(self):
         editables = [
             'git+https://github.com/jek/blinker.git#egg=Blinker',
@@ -403,24 +356,21 @@ class PipModuleTest(ModuleCase):
         ]
 
         # Create the testing virtualenv
-        self.run_function('virtualenv.create', [self.venv_dir])
+        self._create_virtualenv(self.venv_dir)
         ret = self.run_function(
             'pip.install', [],
             editable='{0}'.format(','.join(editables)),
             bin_env=self.venv_dir
         )
-        if self._check_download_error(ret['stdout']):
-            self.skipTest('Test skipped due to pip download error')
-        try:
-            self.assertEqual(ret['retcode'], 0)
-            self.assertIn(
-                'Successfully installed Blinker SaltTesting', ret['stdout']
-            )
-        except AssertionError:
-            import pprint
-            pprint.pprint(ret)
-            raise
 
+        self.assertCmdSuccess(ret)
+        self.assertNotIn('URLError', ret['stdout'])
+        self.assertNotIn('Download error', ret['stdout'])
+        self.assertIn(
+            'Successfully installed Blinker SaltTesting', ret['stdout']
+        )
+
+    @skipIf(PY3, 'WAR ROOM TEMPORARY SKIP')
     def test_pip_install_multiple_editables_and_pkgs(self):
         editables = [
             'git+https://github.com/jek/blinker.git#egg=Blinker',
@@ -428,32 +378,18 @@ class PipModuleTest(ModuleCase):
         ]
 
         # Create the testing virtualenv
-        self.run_function('virtualenv.create', [self.venv_dir])
+        self._create_virtualenv(self.venv_dir)
         ret = self.run_function(
             'pip.install', ['pep8'],
             editable='{0}'.format(','.join(editables)),
             bin_env=self.venv_dir
         )
-        if self._check_download_error(ret['stdout']):
-            self.skipTest('Test skipped due to pip download error')
-        try:
-            self.assertEqual(ret['retcode'], 0)
-            for package in ('Blinker', 'SaltTesting', 'pep8'):
-                self.assertRegex(
-                    ret['stdout'],
-                    r'(?:.*)(Successfully installed)(?:.*)({0})(?:.*)'.format(package)
-                )
-        except AssertionError:
-            import pprint
-            pprint.pprint(ret)
-            raise
 
-    @skipIf(not os.path.isfile('pip3'), 'test where pip3 is installed')
-    @skipIf(salt.utils.platform.is_windows(), 'test specific for linux usage of /bin/python')
-    def test_system_pip3(self):
-        self.run_function('pip.install', pkgs=['lazyimport==0.0.1'], bin_env='/bin/pip3')
-        ret1 = self.run_function('cmd.run', '/bin/pip3 freeze | grep lazyimport')
-        self.run_function('pip.uninstall', pkgs=['lazyimport'], bin_env='/bin/pip3')
-        ret2 = self.run_function('cmd.run', '/bin/pip3 freeze | grep lazyimport')
-        assert 'lazyimport==0.0.1' in ret1
-        assert ret2 == ''
+        self.assertCmdSuccess(ret)
+        self.assertNotIn('URLError', ret['stdout'])
+        self.assertNotIn('Download error', ret['stdout'])
+
+        # Only run this function if we are in python3, as assertRegex doesn't exist in python2.7
+        for package in ('Blinker', 'SaltTesting', 'pep8'):
+            self.assertIn('Successfully installed', ret['stdout'])
+            self.assertIn(package, ret['stdout'])

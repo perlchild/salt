@@ -53,6 +53,7 @@ _OPTS = {
     'renderer_blacklist': [],
     'pillar_merge_lists': False,
     'git_pillar_base': 'master',
+    'git_pillar_fallback': '',
     'git_pillar_branch': 'master',
     'git_pillar_env': '',
     'git_pillar_root': '',
@@ -86,11 +87,16 @@ class ProcessManager(object):
             raise ValueError('one of name or search is required')
         for proc in psutil.process_iter():
             if name is not None:
-                if search is None:
-                    if name in proc.name():
+                try:
+                    if search is None:
+                        if name in proc.name():
+                            return proc
+                    elif name in proc.name() and _search(proc):
                         return proc
-                elif name in proc.name() and _search(proc):
-                    return proc
+                except psutil.NoSuchProcess:
+                    # Whichever process we are interrogating is no longer alive.
+                    # Skip it and keep searching.
+                    continue
             else:
                 if _search(proc):
                     return proc
