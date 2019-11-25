@@ -10,7 +10,7 @@
 from __future__ import absolute_import, print_function, unicode_literals
 import logging
 
-from tests.support.unit import skipIf, WAR_ROOM_SKIP
+from tests.support.unit import skipIf
 
 # Import salt tests libs
 import tests.integration.utils
@@ -21,8 +21,6 @@ import salt.utils.platform
 log = logging.getLogger(__name__)
 
 
-@skipIf(salt.utils.platform.is_windows(), 'Skip on Windows OS')
-@skipIf(WAR_ROOM_SKIP, 'WAR ROOM TEMPORARY SKIP')
 class ProxyTest(testprogram.TestProgramCase):
     '''
     Various integration tests for the salt-proxy executable.
@@ -31,8 +29,6 @@ class ProxyTest(testprogram.TestProgramCase):
     def test_exit_status_no_proxyid(self):
         '''
         Ensure correct exit status when --proxyid argument is missing.
-
-        Skip on Windows because daemonization not supported
         '''
 
         proxy = testprogram.TestDaemonSaltProxy(
@@ -41,12 +37,14 @@ class ProxyTest(testprogram.TestProgramCase):
         )
         # Call setup here to ensure config and script exist
         proxy.setup()
+        # Needed due to verbatim_args=True
+        args = ['--config-dir', proxy.abs_path(proxy.config_dir)]
+        if not salt.utils.platform.is_windows():
+            args.append('-d')
         stdout, stderr, status = proxy.run(
-            args=[
-                '--config-dir', proxy.abs_path(proxy.config_dir),  # Needed due to verbatim_args=True
-                '-d',
-            ],
-            verbatim_args=True,   # prevents --proxyid from being added automatically
+            args=args,
+            # verbatim_args prevents --proxyid from being added automatically
+            verbatim_args=True,
             catch_stderr=True,
             with_retcode=True,
             # The proxy minion had a bug where it would loop forever
@@ -66,11 +64,13 @@ class ProxyTest(testprogram.TestProgramCase):
             # cause timeout exceptions and respective traceback
             proxy.shutdown()
 
+    # Hangs on Windows. You can add a timeout to the proxy.run command, but then
+    # it just times out.
+    @skipIf(salt.utils.platform.is_windows(), 'Test hangs on Windows')
     def test_exit_status_unknown_user(self):
         '''
-        Ensure correct exit status when the proxy is configured to run as an unknown user.
-
-        Skip on Windows because daemonization not supported
+        Ensure correct exit status when the proxy is configured to run as an
+        unknown user.
         '''
 
         proxy = testprogram.TestDaemonSaltProxy(
@@ -81,7 +81,7 @@ class ProxyTest(testprogram.TestProgramCase):
         # Call setup here to ensure config and script exist
         proxy.setup()
         stdout, stderr, status = proxy.run(
-            args=['-d'],
+            args=['-d'] if not salt.utils.platform.is_windows() else [],
             catch_stderr=True,
             with_retcode=True,
         )
@@ -101,9 +101,8 @@ class ProxyTest(testprogram.TestProgramCase):
     # pylint: disable=invalid-name
     def test_exit_status_unknown_argument(self):
         '''
-        Ensure correct exit status when an unknown argument is passed to salt-proxy.
-
-        Skip on Windows because daemonization not supported
+        Ensure correct exit status when an unknown argument is passed to
+        salt-proxy.
         '''
 
         proxy = testprogram.TestDaemonSaltProxy(
@@ -112,8 +111,11 @@ class ProxyTest(testprogram.TestProgramCase):
         )
         # Call setup here to ensure config and script exist
         proxy.setup()
+        args = ['--unknown-argument']
+        if not salt.utils.platform.is_windows():
+            args.append('-b')
         stdout, stderr, status = proxy.run(
-            args=['-d', '--unknown-argument'],
+            args=args,
             catch_stderr=True,
             with_retcode=True,
         )
@@ -129,13 +131,15 @@ class ProxyTest(testprogram.TestProgramCase):
             # cause timeout exceptions and respective traceback
             proxy.shutdown()
 
+    # Hangs on Windows. You can add a timeout to the proxy.run command, but then
+    # it just times out.
+    @skipIf(salt.utils.platform.is_windows(), 'Test hangs on Windows')
     def test_exit_status_correct_usage(self):
         '''
         Ensure correct exit status when salt-proxy starts correctly.
 
         Skip on Windows because daemonization not supported
         '''
-
         proxy = testprogram.TestDaemonSaltProxy(
             name='proxy-correct_usage',
             parent_dir=self._test_dir,
@@ -143,7 +147,7 @@ class ProxyTest(testprogram.TestProgramCase):
         # Call setup here to ensure config and script exist
         proxy.setup()
         stdout, stderr, status = proxy.run(
-            args=['-d'],
+            args=['-d'] if not salt.utils.platform.is_windows() else [],
             catch_stderr=True,
             with_retcode=True,
         )

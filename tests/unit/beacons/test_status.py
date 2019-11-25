@@ -21,23 +21,22 @@ import salt.modules.status as status_module
 
 # Salt testing libs
 from tests.support.unit import TestCase
-from tests.support.unit import skipIf, WAR_ROOM_SKIP  # WAR ROOM temp import
 from tests.support.mixins import LoaderModuleMockMixin
 
 
-@skipIf(WAR_ROOM_SKIP, 'WAR ROOM TEMPORARY SKIP')
 class StatusBeaconTestCase(TestCase, LoaderModuleMockMixin):
     '''
     Test case for salt.beacons.status
     '''
 
     def setup_loader_modules(self):
-        opts = salt.config.DEFAULT_MINION_OPTS.copy()
+        opts = salt.config.DEFAULT_MINION_OPTS
+        opts['grains'] = salt.loader.grains(opts)
         module_globals = {
             '__opts__': opts,
             '__salt__': 'autoload',
             '__context__': {},
-            '__grains__': {'kernel': 'Linux'}
+            '__grains__': opts['grains']
         }
         return {
             status: module_globals,

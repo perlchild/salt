@@ -23,7 +23,6 @@ execution modules
 
     acme
     aix_group
-    aix_shadow
     aixpkg
     aliases
     alternatives
@@ -33,7 +32,6 @@ execution modules
     apf
     apkpkg
     aptpkg
-    aptly
     archive
     arista_pyeapi
     artifactory
@@ -42,19 +40,15 @@ execution modules
     augeas_cfg
     aws_sqs
     azurearm_compute
-    azurearm_dns
     azurearm_network
     azurearm_resource
     bamboohr
-    baredoc
     bcache
     beacons
     bigip
-    bluecoat_sslv
     bluez_bluetooth
     boto3_elasticache
     boto3_route53
-    boto3_sns
     boto_apigateway
     boto_asg
     boto_cfn
@@ -78,12 +72,10 @@ execution modules
     boto_lambda
     boto_rds
     boto_route53
-    boto_s3
     boto_s3_bucket
     boto_secgroup
     boto_sns
     boto_sqs
-    boto_ssm
     boto_vpc
     bower
     bridge
@@ -99,7 +91,6 @@ execution modules
     chef
     chocolatey
     chronos
-    chroot
     cimc
     ciscoconfparse_mod
     cisconso
@@ -112,7 +103,6 @@ execution modules
     cp
     cpan
     cron
-    cryptdev
     csf
     cyg
     daemontools
@@ -145,17 +135,13 @@ execution modules
     elasticsearch
     environ
     eselect
-    esxcluster
-    esxdatacenter
     esxi
-    esxvm
     etcd_mod
     ethtool
     event
     extfs
     file
     firewalld
-    flatpak
     freebsd_sysctl
     freebsd_update
     freebsdjail
@@ -163,8 +149,6 @@ execution modules
     freebsdpkg
     freebsdports
     freebsdservice
-    freezer
-    gcp_addon
     gem
     genesis
     gentoo_service
@@ -173,7 +157,6 @@ execution modules
     github
     glance
     glanceng
-    glassfish
     glusterfs
     gnomedesktop
     google_chat
@@ -188,7 +171,7 @@ execution modules
     hashutil
     heat
     hg
-    highstate_doc
+    hipchat
     hosts
     http
     ifttt
@@ -217,9 +200,7 @@ execution modules
     jboss7
     jboss7_cli
     jenkinsmod
-    jinja
     jira_mod
-    jsonnet
     junos
     k8s
     kapacitor
@@ -230,7 +211,6 @@ execution modules
     keyboard
     keystone
     keystoneng
-    keystore
     kmod
     kubernetesmod
     launchctl_service
@@ -252,7 +232,6 @@ execution modules
     logrotate
     lvs
     lxc
-    lxd
     mac_assistive
     mac_brew_pkg
     macdefaults
@@ -320,8 +299,6 @@ execution modules
     network
     neutron
     neutronng
-    nexus
-    nxos_upgrade
     nfs3
     nftables
     nginx
@@ -333,7 +310,6 @@ execution modules
     nxos
     nxos_api
     omapi
-    onyx
     openbsd_sysctl
     openbsdpkg
     openbsdrcctl_service
@@ -386,6 +362,7 @@ execution modules
     qemu_nbd
     quota
     rabbitmq
+    raet_publish
     rallydev
     random_org
     rbac_solaris
@@ -409,10 +386,8 @@ execution modules
     s3
     s6
     salt_proxy
-    salt_version
     saltcheck
     saltcloudmod
-    saltsupport
     saltutil
     schedule
     scp_mod
@@ -450,7 +425,6 @@ execution modules
     ssh
     ssh_pkg
     ssh_service
-    snap
     snapper
     state
     status
@@ -492,14 +466,12 @@ execution modules
     vault
     vbox_guest
     vboxmanage
-    vcenter
     victorops
     virt
     virtualenv_mod
     vmctl
     vsphere
     webutil
-    win_auditpol
     win_autoruns
     win_certutil
     win_dacl
@@ -534,12 +506,10 @@ execution modules
     win_useradd
     win_wua
     win_wusa
-    wordpress
     x509
     xapi_virt
     xbpspkg
     xfs
-    xml
     xmpp
     yumpkg
     zabbix

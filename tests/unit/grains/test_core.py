@@ -19,6 +19,7 @@ except ImportError as import_error:
 from tests.support.mixins import LoaderModuleMockMixin
 from tests.support.unit import TestCase, skipIf
 from tests.support.mock import (
+    Mock,
     MagicMock,
     patch,
     mock_open,
@@ -820,7 +821,7 @@ class CoreGrainsTestCase(TestCase, LoaderModuleMockMixin):
     @skipIf(salt.utils.platform.is_windows(), 'System is Windows')
     def test_docker_virtual(self):
         '''
-        Test if virtual grains are parsed correctly in Docker.
+        Test if OS grains are parsed correctly in Ubuntu Xenial Xerus
         '''
         with patch.object(os.path, 'isdir', MagicMock(return_value=False)):
             with patch.object(os.path,
@@ -834,79 +835,26 @@ class CoreGrainsTestCase(TestCase, LoaderModuleMockMixin):
                         'Testing Docker cgroup substring \'%s\'', cgroup_substr)
                     with patch('salt.utils.files.fopen', mock_open(read_data=cgroup_data)):
                         with patch.dict(core.__salt__, {'cmd.run_all': MagicMock()}):
-                            grains = core._virtual({'kernel': 'Linux'})
                             self.assertEqual(
-                                grains.get('virtual_subtype'),
+                                core._virtual({'kernel': 'Linux'}).get('virtual_subtype'),
                                 'Docker'
                             )
-                            self.assertEqual(
-                                grains.get('virtual'),
-                                'container',
-                            )
-
-    @skipIf(salt.utils.platform.is_windows(), 'System is Windows')
-    def test_lxc_virtual(self):
-        '''
-        Test if virtual grains are parsed correctly in LXC.
-        '''
-        with patch.object(os.path, 'isdir', MagicMock(return_value=False)):
-            with patch.object(os.path,
-                              'isfile',
-                              MagicMock(side_effect=lambda x: True if x == '/proc/1/cgroup' else False)):
-                cgroup_data = '10:memory:/lxc/a_long_sha256sum'
-                with patch('salt.utils.files.fopen', mock_open(read_data=cgroup_data)):
-                    with patch.dict(core.__salt__, {'cmd.run_all': MagicMock()}):
-                        grains = core._virtual({'kernel': 'Linux'})
-                        self.assertEqual(
-                            grains.get('virtual_subtype'),
-                            'LXC'
-                        )
-                        self.assertEqual(
-                            grains.get('virtual'),
-                            'container',
-                        )
 
     @skipIf(not salt.utils.platform.is_linux(), 'System is not Linux')
     def test_xen_virtual(self):
         '''
         Test if OS grains are parsed correctly in Ubuntu Xenial Xerus
         '''
-        with patch.multiple(os.path, isdir=MagicMock(side_effect=lambda x: x == '/sys/bus/xen'),
-                            isfile=MagicMock(side_effect=lambda x:
-                                             x == '/sys/bus/xen/drivers/xenconsole')):
-            with patch.dict(core.__salt__, {'cmd.run': MagicMock(return_value='')}):
+        with patch.object(os.path, 'isfile', MagicMock(return_value=False)):
+            with patch.dict(core.__salt__, {'cmd.run': MagicMock(return_value='')}), \
+                patch.object(os.path,
+                             'isfile',
+                             MagicMock(side_effect=lambda x: True if x == '/sys/bus/xen/drivers/xenconsole' else False)):
                 log.debug('Testing Xen')
                 self.assertEqual(
                     core._virtual({'kernel': 'Linux'}).get('virtual_subtype'),
                     'Xen PV DomU'
                 )
-
-    def test_if_virtual_subtype_exists_virtual_should_fallback_to_virtual(self):
-        def mockstat(path):
-            if path == '/':
-                return 'fnord'
-            elif path == '/proc/1/root/.':
-                return 'roscivs'
-            return None
-        with patch.dict(
-            core.__salt__,
-            {
-                'cmd.run': MagicMock(return_value=''),
-                'cmd.run_all': MagicMock(return_value={'retcode': 0, 'stdout': ''}),
-            }
-        ):
-            with patch.multiple(
-                os.path,
-                isfile=MagicMock(return_value=False),
-                isdir=MagicMock(side_effect=lambda x: x == '/proc'),
-            ):
-                with patch.multiple(
-                    os,
-                    stat=MagicMock(side_effect=mockstat),
-                ):
-                    grains = core._virtual({'kernel': 'Linux'})
-                    assert grains.get('virtual_subtype') is not None
-                    assert grains.get('virtual') == 'virtual'
 
     def _check_ipaddress(self, value, ip_v):
         '''
@@ -1030,7 +978,7 @@ class CoreGrainsTestCase(TestCase, LoaderModuleMockMixin):
             assert core.dns() == ret
 
     @skipIf(not salt.utils.platform.is_linux(), 'System is not Linux')
-    @patch.object(salt.utils.platform, 'is_windows', MagicMock(return_value=False))
+    @patch.object(salt.utils, 'is_windows', MagicMock(return_value=False))
     @patch('salt.utils.network.ip_addrs', MagicMock(return_value=['1.2.3.4', '5.6.7.8']))
     @patch('salt.utils.network.ip_addrs6',
            MagicMock(return_value=['fe80::a8b2:93ff:fe00:0', 'fe80::a8b2:93ff:dead:beef']))
@@ -1047,32 +995,9 @@ class CoreGrainsTestCase(TestCase, LoaderModuleMockMixin):
         ret = {'fqdns': ['bluesniff.foo.bar', 'foo.bar.baz', 'rinzler.evil-corp.com']}
         with patch.object(socket, 'gethostbyaddr', side_effect=reverse_resolv_mock):
             fqdns = core.fqdns()
-            assert "fqdns" in fqdns
-            assert len(fqdns['fqdns']) == len(ret['fqdns'])
-            assert set(fqdns['fqdns']) == set(ret['fqdns'])
-
-    @skipIf(not salt.utils.platform.is_linux(), 'System is not Linux')
-    @patch.object(salt.utils.platform, 'is_windows', MagicMock(return_value=False))
-    @patch('salt.utils.network.ip_addrs', MagicMock(return_value=['1.2.3.4', '5.6.7.8']))
-    @patch('salt.utils.network.ip_addrs6',
-           MagicMock(return_value=['fe80::a8b2:93ff:fe00:0', 'fe80::a8b2:93ff:dead:beef']))
-    @patch('salt.utils.network.socket.getfqdn', MagicMock(side_effect=lambda v: v))  # Just pass-through
-    def test_fqdns_aliases(self):
-        '''
-        FQDNs aliases
-        '''
-        reverse_resolv_mock = [('foo.bar.baz', ["throwmeaway", "this.is.valid.alias"], ['1.2.3.4']),
-                               ('rinzler.evil-corp.com', ["false-hostname", "badaliass"], ['5.6.7.8']),
-                               ('foo.bar.baz', [], ['fe80::a8b2:93ff:fe00:0']),
-                               ('bluesniff.foo.bar', ["alias.bluesniff.foo.bar"], ['fe80::a8b2:93ff:dead:beef'])]
-        with patch.object(socket, 'gethostbyaddr', side_effect=reverse_resolv_mock):
-            fqdns = core.fqdns()
-            assert "fqdns" in fqdns
-            for alias in ["this.is.valid.alias", "alias.bluesniff.foo.bar"]:
-                assert alias in fqdns["fqdns"]
-
-            for alias in ["throwmeaway", "false-hostname", "badaliass"]:
-                assert alias not in fqdns["fqdns"]
+            self.assertIn('fqdns', fqdns)
+            self.assertEqual(len(fqdns['fqdns']), len(ret['fqdns']))
+            self.assertEqual(set(fqdns['fqdns']), set(ret['fqdns']))
 
     def test_core_virtual(self):
         '''
@@ -1248,72 +1173,71 @@ class CoreGrainsTestCase(TestCase, LoaderModuleMockMixin):
             assert ret['swap_total'] == 0
             assert ret['mem_total'] == 4096
 
-    @patch('salt.utils.path.which', MagicMock(return_value='/usr/sbin/lspci'))
-    def test_linux_gpus(self):
-        '''
-        Test GPU detection on Linux systems
-        '''
-        def _cmd_side_effect(cmd):
-            ret = ''
-            for device in devices:
-                ret += textwrap.dedent('''
-                                          Class:	{0}
-                                          Vendor:	{1}
-                                          Device:	{2}
-                                          SVendor:	Evil Corp.
-                                          SDevice:	Graphics XXL
-                                          Rev:	c1
-                                          NUMANode:	0''').format(*device)
-                ret += '\n'
-            return ret.strip()
-        devices = [["VGA compatible controller", "Advanced Micro Devices, Inc. [AMD/ATI]",
-                    "Vega [Radeon RX Vega]]", "amd"],  # AMD
-                   ["Audio device", "Advanced Micro Devices, Inc. [AMD/ATI]",
-                    "Device aaf8", None],  # non-GPU device
-                   ["VGA compatible controller", "NVIDIA Corporation",
-                    "GK208 [GeForce GT 730]", "nvidia"],  # Nvidia
-                   ["VGA compatible controller", "Intel Corporation",
-                    "Device 5912", "intel"],  # Intel
-                   ["VGA compatible controller", "ATI Technologies Inc",
-                    "RC410 [Radeon Xpress 200M]", "ati"],  # ATI
-                   ["3D controller", "NVIDIA Corporation",
-                    "GeForce GTX 950M", "nvidia"]  # 3D controller
-                  ]
-        with patch.dict(core.__salt__, {'cmd.run': MagicMock(side_effect=_cmd_side_effect)}):
-            ret = core._linux_gpu_data()['gpus']
-            count = 0
-            for device in devices:
-                if device[3] is None:
-                    continue
-                assert ret[count]['model'] == device[2]
-                assert ret[count]['vendor'] == device[3]
-                count += 1
+    @skipIf(not core._DATEUTIL_TZ, 'Missing dateutil.tz')
+    def test_locale_info_tzname(self):
+        # mock datetime.now().tzname()
+        # cant just mock now because it is read only
+        tzname = Mock(return_value='MDT_FAKE')
+        now_ret_object = Mock(tzname=tzname)
+        now = Mock(return_value=now_ret_object)
+        datetime = Mock(now=now)
 
-    @skipIf(not salt.utils.platform.is_linux(), 'System is not Linux')
-    def test_kernelparams_return(self):
-        expectations = [
-            ('BOOT_IMAGE=/vmlinuz-3.10.0-693.2.2.el7.x86_64',
-             {'kernelparams': [('BOOT_IMAGE', '/vmlinuz-3.10.0-693.2.2.el7.x86_64')]}),
-            ('root=/dev/mapper/centos_daemon-root',
-             {'kernelparams': [('root', '/dev/mapper/centos_daemon-root')]}),
-            ('rhgb quiet ro',
-             {'kernelparams': [('rhgb', None), ('quiet', None), ('ro', None)]}),
-            ('param="value1"',
-             {'kernelparams': [('param', 'value1')]}),
-            ('param="value1 value2 value3"',
-             {'kernelparams': [('param', 'value1 value2 value3')]}),
-            ('param="value1 value2 value3" LANG="pl" ro',
-             {'kernelparams': [('param', 'value1 value2 value3'), ('LANG', 'pl'), ('ro', None)]}),
-            ('ipv6.disable=1',
-             {'kernelparams': [('ipv6.disable', '1')]}),
-            ('param="value1:value2:value3"',
-             {'kernelparams': [('param', 'value1:value2:value3')]}),
-            ('param="value1,value2,value3"',
-             {'kernelparams': [('param', 'value1,value2,value3')]}),
-            ('param="value1" param="value2" param="value3"',
-             {'kernelparams': [('param', 'value1'), ('param', 'value2'), ('param', 'value3')]}),
-        ]
+        with patch.object(core, 'datetime', datetime=datetime) as datetime_module:
+            with patch.object(core.dateutil.tz, 'tzlocal', return_value=object) as tzlocal:
+                with patch.object(salt.utils.platform, 'is_proxy', return_value=False) as is_proxy:
+                    ret = core.locale_info()
 
-        for cmdline, expectation in expectations:
-            with patch('salt.utils.files.fopen', mock_open(read_data=cmdline)):
-                self.assertEqual(core.kernelparams(), expectation)
+                    tzname.assert_called_once_with()
+                    self.assertEqual(len(now_ret_object.method_calls), 1)
+                    now.assert_called_once_with(object)
+                    self.assertEqual(len(datetime.method_calls), 1)
+                    self.assertEqual(len(datetime_module.method_calls), 1)
+                    tzlocal.assert_called_once_with()
+                    is_proxy.assert_called_once_with()
+
+                    self.assertEqual(ret['locale_info']['timezone'], 'MDT_FAKE')
+
+    @skipIf(not core._DATEUTIL_TZ, 'Missing dateutil.tz')
+    def test_locale_info_unicode_error_tzname(self):
+        # UnicodeDecodeError most have the default string encoding
+        unicode_error = UnicodeDecodeError(str('fake'), b'\x00\x00', 1, 2, str('fake'))
+
+        # mock datetime.now().tzname()
+        # cant just mock now because it is read only
+        tzname = Mock(return_value='MDT_FAKE')
+        now_ret_object = Mock(tzname=tzname)
+        now = Mock(return_value=now_ret_object)
+        datetime = Mock(now=now)
+
+        # mock tzname[0].decode()
+        decode = Mock(return_value='CST_FAKE')
+        tzname2 = (Mock(decode=decode,),)
+
+        with patch.object(core, 'datetime', datetime=datetime) as datetime_module:
+            with patch.object(core.dateutil.tz, 'tzlocal', side_effect=unicode_error) as tzlocal:
+                with patch.object(salt.utils.platform, 'is_proxy', return_value=False) as is_proxy:
+                    with patch.object(core.salt.utils.platform, 'is_windows', return_value=True) as is_windows:
+                        with patch.object(core, 'time', tzname=tzname2):
+                            ret = core.locale_info()
+
+                            tzname.assert_not_called()
+                            self.assertEqual(len(now_ret_object.method_calls), 0)
+                            now.assert_not_called()
+                            self.assertEqual(len(datetime.method_calls), 0)
+                            decode.assert_called_once_with('mbcs')
+                            self.assertEqual(len(tzname2[0].method_calls), 1)
+                            self.assertEqual(len(datetime_module.method_calls), 0)
+                            tzlocal.assert_called_once_with()
+                            is_proxy.assert_called_once_with()
+                            is_windows.assert_called_once_with()
+
+                            self.assertEqual(ret['locale_info']['timezone'], 'CST_FAKE')
+
+    @skipIf(core._DATEUTIL_TZ, 'Not Missing dateutil.tz')
+    def test_locale_info_no_tz_tzname(self):
+        with patch.object(salt.utils.platform, 'is_proxy', return_value=False) as is_proxy:
+            with patch.object(core.salt.utils.platform, 'is_windows', return_value=True) as is_windows:
+                ret = core.locale_info()
+                is_proxy.assert_called_once_with()
+                is_windows.assert_not_called()
+                self.assertEqual(ret['locale_info']['timezone'], 'unknown')

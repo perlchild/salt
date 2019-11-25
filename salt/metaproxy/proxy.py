@@ -69,7 +69,6 @@ log = logging.getLogger(__name__)
 
 
 def post_master_init(self, master):
-
     log.debug("subclassed LazyLoaded _post_master_init")
     if self.connected:
         self.opts['master'] = master
@@ -109,10 +108,8 @@ def post_master_init(self, master):
             try:
                 self.opts['mine_functions'] = general_proxy_mines + specific_proxy_mines
             except TypeError as terr:
-                log.error(
-                    'Unable to merge mine functions from the pillar in the '
-                    'opts, for proxy %s', self.opts['id']
-                )
+                log.error('Unable to merge mine functions from the pillar in the opts, for proxy {}'.format(
+                    self.opts['id']))
 
     fq_proxyname = self.opts['proxy']['proxytype']
 
@@ -338,15 +335,6 @@ def thread_return(cls, minion_instance, opts, data):
     '''
     fn_ = os.path.join(minion_instance.proc_dir, data['jid'])
 
-    if opts['multiprocessing'] and not salt.utils.platform.is_windows():
-        # Shutdown the multiprocessing before daemonizing
-        salt.log.setup.shutdown_multiprocessing_logging()
-
-        salt.utils.process.daemonize_if(opts)
-
-        # Reconfigure multiprocessing logging after daemonizing
-        salt.log.setup.setup_multiprocessing_logging()
-
     salt.utils.process.appendproctitle('{0}._thread_return {1}'.format(cls.__name__, data['jid']))
 
     sdata = {'pid': os.getpid()}
@@ -561,15 +549,6 @@ def thread_multi_return(cls, minion_instance, opts, data):
     '''
     fn_ = os.path.join(minion_instance.proc_dir, data['jid'])
 
-    if opts['multiprocessing'] and not salt.utils.platform.is_windows():
-        # Shutdown the multiprocessing before daemonizing
-        salt.log.setup.shutdown_multiprocessing_logging()
-
-        salt.utils.process.daemonize_if(opts)
-
-        # Reconfigure multiprocessing logging after daemonizing
-        salt.log.setup.setup_multiprocessing_logging()
-
     salt.utils.process.appendproctitle('{0}._thread_multi_return {1}'.format(cls.__name__, data['jid']))
 
     sdata = {'pid': os.getpid()}
@@ -727,16 +706,11 @@ def handle_decoded_payload(self, data):
             self.schedule.returners = self.returners
 
     process_count_max = self.opts.get('process_count_max')
-    process_count_max_sleep_secs = self.opts.get('process_count_max_sleep_secs')
     if process_count_max > 0:
         process_count = len(salt.utils.minion.running(self.opts))
         while process_count >= process_count_max:
-            log.warning('Maximum number of processes (%s) reached while '
-                        'executing jid %s, waiting %s seconds...',
-                        process_count_max,
-                        data['jid'],
-                        process_count_max_sleep_secs)
-            yield tornado.gen.sleep(process_count_max_sleep_secs)
+            log.warning("Maximum number of processes reached while executing jid {0}, waiting...".format(data['jid']))
+            yield tornado.gen.sleep(10)
             process_count = len(salt.utils.minion.running(self.opts))
 
     # We stash an instance references to allow for the socket
@@ -752,9 +726,7 @@ def handle_decoded_payload(self, data):
             instance = None
         with default_signals(signal.SIGINT, signal.SIGTERM):
             process = SignalHandlingMultiprocessingProcess(
-                target=self._target,
-                name='ProcessPayload',
-                args=(instance, self.opts, data, self.connected)
+                target=self._target, args=(instance, self.opts, data, self.connected)
             )
     else:
         process = threading.Thread(
@@ -770,13 +742,8 @@ def handle_decoded_payload(self, data):
             process.start()
     else:
         process.start()
-
-    # TODO: remove the windows specific check?
-    if multiprocessing_enabled and not salt.utils.platform.is_windows():
-        # we only want to join() immediately if we are daemonizing a process
-        process.join()
-    else:
-        self.win_proc.append(process)
+    process.name = '{}-Job-{}'.format(process.name, data['jid'])
+    self.subprocess_list.add(process)
 
 
 def target_load(self, load):

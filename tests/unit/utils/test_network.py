@@ -11,6 +11,7 @@ from tests.support.unit import TestCase
 from tests.support.mock import (
     MagicMock,
     mock_open,
+    create_autospec,
     patch,
     NO_MOCK,
     NO_MOCK_REASON,
@@ -18,6 +19,7 @@ from tests.support.mock import (
 
 # Import salt libs
 import salt.utils.network as network
+import salt.exceptions
 from salt._compat import ipaddress
 
 log = logging.getLogger(__name__)
@@ -248,28 +250,6 @@ class NetworkTestCase(TestCase):
                 raise _e_
 
     def test_dns_check(self):
-        class MockSocket(object):
-            def __init__(self, *args, **kwargs):
-                pass
-
-            def __call__(self, *args, **kwargs):
-                pass
-
-            def setsockopt(self, *args, **kwargs):
-                pass
-
-            def settimeout(self, *args, **kwargs):
-                pass
-
-            def sendto(self, *args, **kwargs):
-                pass
-
-            def connect(self, *args, **kwargs):
-                pass
-
-            def close(self, *args, **kwargs):
-                pass
-
         hosts = [
             {'host': '10.10.0.3',
              'port': '',
@@ -293,11 +273,59 @@ class NetworkTestCase(TestCase):
              'ret': '127.0.0.1'},
         ]
         for host in hosts:
-            log.debug('=== host %s ===', host)
-            with patch.object(socket, 'getaddrinfo', MagicMock(return_value=host['mocked'])):
-                with patch('socket.socket', MockSocket):
+            with patch.object(socket, 'getaddrinfo', create_autospec(socket.getaddrinfo, return_value=host['mocked'])):
+                with patch('socket.socket', create_autospec(socket.socket)):
                     ret = network.dns_check(host['host'], host['port'])
                     self.assertEqual(ret, host['ret'])
+
+    def test_dns_check_ipv6_filter(self):
+        # raise exception to skip everything after the getaddrinfo call
+        with patch.object(socket, 'getaddrinfo',
+                          create_autospec(socket.getaddrinfo, side_effect=Exception)) as getaddrinfo:
+            for ipv6, param in [
+                (None, socket.AF_UNSPEC),
+                (True, socket.AF_INET6),
+                (False, socket.AF_INET),
+            ]:
+                with self.assertRaises(Exception):
+                    network.dns_check('foo', '1', ipv6=ipv6)
+                getaddrinfo.assert_called_with('foo', '1', param, socket.SOCK_STREAM)
+
+    def test_dns_check_errors(self):
+        with patch.object(socket, 'getaddrinfo', create_autospec(socket.getaddrinfo, return_value=[])):
+            with self.assertRaisesRegex(salt.exceptions.SaltSystemExit,
+                                        "DNS lookup or connection check of 'foo' failed"):
+                network.dns_check('foo', '1')
+
+        with patch.object(socket, 'getaddrinfo', create_autospec(socket.getaddrinfo, side_effect=TypeError)):
+            with self.assertRaisesRegex(salt.exceptions.SaltSystemExit,
+                                        "Invalid or unresolveable address"):
+                network.dns_check('foo', '1')
+
+    def test_test_addrs(self):
+        # subset of real data from getaddrinfo against saltstack.com
+        addrinfo = [(30, 2, 17, '', ('2600:9000:21eb:a800:8:1031:abc0:93a1', 0, 0, 0)),
+                    (30, 1, 6, '', ('2600:9000:21eb:a800:8:1031:abc0:93a1', 0, 0, 0)),
+                    (30, 2, 17, '', ('2600:9000:21eb:b400:8:1031:abc0:93a1', 0, 0, 0)),
+                    (30, 1, 6, '', ('2600:9000:21eb:b400:8:1031:abc0:93a1', 0, 0, 0)),
+                    (2, 1, 6, '', ('13.35.99.52', 0)), (2, 2, 17, '', ('13.35.99.85', 0)),
+                    (2, 1, 6, '', ('13.35.99.85', 0)), (2, 2, 17, '', ('13.35.99.122', 0))]
+        with patch('socket.socket', create_autospec(socket.socket)) as s:
+            # we connect to the first address
+            addrs = network._test_addrs(addrinfo, 80)
+            self.assertTrue(len(addrs) == 1)
+            self.assertTrue(addrs[0] == addrinfo[0][4][0])
+
+            # the first lookup fails, succeeds on next check
+            s.side_effect = [socket.error, MagicMock()]
+            addrs = network._test_addrs(addrinfo, 80)
+            self.assertTrue(len(addrs) == 1)
+            self.assertTrue(addrs[0] == addrinfo[2][4][0])
+
+            # nothing can connect, but we've eliminated duplicates
+            s.side_effect = socket.error
+            addrs = network._test_addrs(addrinfo, 80)
+            self.assertTrue(len(addrs) == 5)
 
     def test_is_subnet(self):
         for subnet_data in (IPV4_SUBNETS, IPV6_SUBNETS):
@@ -636,17 +664,6 @@ class NetworkTestCase(TestCase):
         self.assertEqual(b'\x10\x08\x06\x04\x02\x00', network.mac_str_to_bytes('100806040200'))
         self.assertEqual(b'\xf8\xe7\xd6\xc5\xb4\xa3', network.mac_str_to_bytes('f8e7d6c5b4a3'))
 
-    def test_get_fqhostname_return(self):
-        '''
-        Test if proper hostname is used when RevDNS differ from hostname
-
-        :return:
-        '''
-        with patch('socket.gethostname', MagicMock(return_value='hostname')), \
-             patch('socket.getfqdn', MagicMock(return_value='very.long.and.complex.domain.name')), \
-             patch('socket.getaddrinfo', MagicMock(return_value=[(2, 3, 0, 'hostname', ('127.0.1.1', 0))])):
-            self.assertEqual(network.get_fqhostname(), 'hostname')
-
     def test_generate_minion_id_with_long_hostname(self):
         '''
         Validate the fix for:
@@ -658,25 +675,6 @@ class NetworkTestCase(TestCase):
             # An exception is raised if unicode is passed to socket.getfqdn
             minion_id = network.generate_minion_id()
         assert minion_id != '', minion_id
-
-    def test_is_fqdn(self):
-        """
-        Test is_fqdn function passes possible FQDN names.
-
-        :return: None
-        """
-        for fqdn in ["host.domain.com", "something.with.the.dots.still.ok", "UPPERCASE.ALSO.SHOULD.WORK",
-                     "MiXeD.CaSe.AcCePtAbLe", "123.host.com", "host123.com", "some_underscore.com", "host-here.com"]:
-            assert network.is_fqdn(fqdn)
-
-    def test_is_not_fqdn(self):
-        """
-        Test is_fqdn function rejects FQDN names.
-
-        :return: None
-        """
-        for fqdn in ["hostname", "/some/path", "$variable.here", "verylonghostname.{}".format("domain" * 45)]:
-            assert not network.is_fqdn(fqdn)
 
     def test_netlink_tool_remote_on(self):
         with patch('subprocess.check_output', return_value=NETLINK_SS):

@@ -89,7 +89,6 @@ import salt.utils.schedule
 import salt.utils.ssdp
 import salt.utils.user
 import salt.utils.zeromq
-import salt.defaults.events
 import salt.defaults.exitcodes
 import salt.cli.daemons
 import salt.log.setup
@@ -150,8 +149,7 @@ def resolve_dns(opts, fallback=True):
                 opts['master'],
                 int(opts['master_port']),
                 True,
-                opts['ipv6'],
-                attempt_connect=False)
+                opts['ipv6'])
         except SaltClientError:
             retry_dns_count = opts.get('retry_dns_count', None)
             if opts['retry_dns']:
@@ -173,8 +171,7 @@ def resolve_dns(opts, fallback=True):
                             opts['master'],
                             int(opts['master_port']),
                             True,
-                            opts['ipv6'],
-                            attempt_connect=False)
+                            opts['ipv6'])
                         break
                     except SaltClientError:
                         pass
@@ -226,8 +223,7 @@ def resolve_dns(opts, fallback=True):
             opts['source_address'],
             int(opts['source_ret_port']),
             True,
-            opts['ipv6'],
-            attempt_connect=False)
+            opts['ipv6'])
         log.debug('Using %s as source IP address', ret['source_ip'])
     if opts['source_ret_port']:
         ret['source_ret_port'] = int(opts['source_ret_port'])
@@ -425,6 +421,43 @@ def service_name():
 class MinionBase(object):
     def __init__(self, opts):
         self.opts = opts
+        self.beacons_leader = opts.get('beacons_leader', True)
+
+    def gen_modules(self, initial_load=False):
+        '''
+        Tell the minion to reload the execution modules
+
+        CLI Example:
+
+        .. code-block:: bash
+
+            salt '*' sys.reload_modules
+        '''
+        if initial_load:
+            self.opts['pillar'] = salt.pillar.get_pillar(
+                self.opts,
+                self.opts['grains'],
+                self.opts['id'],
+                self.opts['saltenv'],
+                pillarenv=self.opts.get('pillarenv'),
+            ).compile_pillar()
+
+        self.utils = salt.loader.utils(self.opts)
+        self.functions = salt.loader.minion_mods(self.opts, utils=self.utils)
+        self.serializers = salt.loader.serializers(self.opts)
+        self.returners = salt.loader.returners(self.opts, self.functions)
+        self.proxy = salt.loader.proxy(self.opts, self.functions, self.returners, None)
+        # TODO: remove
+        self.function_errors = {}  # Keep the funcs clean
+        self.states = salt.loader.states(self.opts,
+                self.functions,
+                self.utils,
+                self.serializers)
+        self.rend = salt.loader.render(self.opts, self.functions)
+#        self.matcher = Matcher(self.opts, self.functions)
+        self.matchers = salt.loader.matchers(self.opts)
+        self.functions['sys.reload_modules'] = self.gen_modules
+        self.executors = salt.loader.executors(self.opts, self.functions)
 
     @staticmethod
     def process_schedule(minion, loop_interval):
@@ -486,11 +519,7 @@ class MinionBase(object):
 
         # Run masters discovery over SSDP. This may modify the whole configuration,
         # depending of the networking and sets of masters.
-        # if we are using multimaster, discovery can only happen at start time
-        # because MinionManager handles it. by eval_master time the minion doesn't
-        # know about other siblings currently running
-        if isinstance(self.opts['discovery'], dict) and not self.opts['discovery'].get('multimaster'):
-            self._discover_masters()
+        self._discover_masters()
 
         # check if master_type was altered from its default
         if opts['master_type'] != 'str' and opts['__role'] != 'syndic':
@@ -590,27 +619,12 @@ class MinionBase(object):
         tries = opts.get('master_tries', 1)
         attempts = 0
 
-        # This sits outside of the connection loop below because it needs to set
-        # up a list of master URIs regardless of which masters are available
-        # to connect _to_. This is primarily used for masterless mode, when
-        # we need a list of master URIs to fire calls back to.
-        opts['master_uri_list'] = []
-        if 'master_list' not in opts:
-            if isinstance(opts['master'], list):
-                opts['master_list'] = copy.copy(opts['master'])
-            else:
-                opts['master_list'] = [opts['master']]
-
-        for master in opts['master_list']:
-            opts['master'] = master
-            opts.update(prep_ip_port(opts))
-            opts['master_uri_list'].append(resolve_dns(opts)['master_uri'])
-
         # if we have a list of masters, loop through them and be
         # happy with the first one that allows us to connect
         if isinstance(opts['master'], list):
             conn = False
             last_exc = None
+            opts['master_uri_list'] = []
             opts['local_masters'] = copy.copy(opts['master'])
 
             # shuffle the masters and then loop through them
@@ -622,6 +636,15 @@ class MinionBase(object):
                     opts['local_masters'][1:] = secondary_masters
                 else:
                     shuffle(opts['local_masters'])
+
+            # This sits outside of the connection loop below because it needs to set
+            # up a list of master URIs regardless of which masters are available
+            # to connect _to_. This is primarily used for masterless mode, when
+            # we need a list of master URIs to fire calls back to.
+            for master in opts['local_masters']:
+                opts['master'] = master
+                opts.update(prep_ip_port(opts))
+                opts['master_uri_list'].append(resolve_dns(opts)['master_uri'])
 
             while True:
                 if attempts != 0:
@@ -732,7 +755,7 @@ class MinionBase(object):
                     if attempts == tries:
                         # Exhausted all attempts. Return exception.
                         self.connected = False
-                        six.reraise(*sys.exc_info())
+                        raise exc
 
     def _discover_masters(self):
         '''
@@ -761,20 +784,15 @@ class MinionBase(object):
                 if policy not in ['any', 'all']:
                     log.error('SSDP configuration matcher failure: unknown value "%s". '
                               'Should be "any" or "all"', policy)
-                    return
-                mapping = self.opts['discovery'].get('mapping', {})
-                discovered = []
-                for addr, mappings in masters.items():
-                    for proto_data in mappings:
-                        cnt = len([key for key, value in mapping.items()
-                                   if proto_data.get('mapping', {}).get(key) == value])
-                        if policy == 'any' and bool(cnt) or cnt == len(mapping):
-                            if self.opts['discovery'].get('multimaster'):
-                                discovered.append(proto_data['master'])
-                            else:
+                else:
+                    mapping = self.opts['discovery'].get('mapping', {})
+                    for addr, mappings in masters.items():
+                        for proto_data in mappings:
+                            cnt = len([key for key, value in mapping.items()
+                                       if proto_data.get('mapping', {}).get(key) == value])
+                            if policy == 'any' and bool(cnt) or cnt == len(mapping):
                                 self.opts['master'] = proto_data['master']
                                 return
-                self.opts['master'] = discovered
 
     def _return_retry_timer(self):
         '''
@@ -817,9 +835,6 @@ class SMinion(MinionBase):
         opts['grains'] = salt.loader.grains(opts)
         super(SMinion, self).__init__(opts)
 
-        # run ssdp discovery if necessary
-        self._discover_masters()
-
         # Clean out the proc directory (default /var/cache/salt/minion/proc)
         if (self.opts.get('file_client', 'remote') == 'remote'
                 or self.opts.get('use_master_when_local', False)):
@@ -849,41 +864,6 @@ class SMinion(MinionBase):
             with salt.utils.files.fopen(cache_sls, 'wb') as fp_:
                 salt.utils.yaml.safe_dump(self.opts['pillar'], fp_)
                 os.chmod(cache_sls, 0o600)
-
-    def gen_modules(self, initial_load=False):
-        '''
-        Tell the minion to reload the execution modules
-
-        CLI Example:
-
-        .. code-block:: bash
-
-            salt '*' sys.reload_modules
-        '''
-        self.opts['pillar'] = salt.pillar.get_pillar(
-            self.opts,
-            self.opts['grains'],
-            self.opts['id'],
-            self.opts['saltenv'],
-            pillarenv=self.opts.get('pillarenv'),
-        ).compile_pillar()
-
-        self.utils = salt.loader.utils(self.opts)
-        self.functions = salt.loader.minion_mods(self.opts, utils=self.utils)
-        self.serializers = salt.loader.serializers(self.opts)
-        self.returners = salt.loader.returners(self.opts, self.functions)
-        self.proxy = salt.loader.proxy(self.opts, self.functions, self.returners, None)
-        # TODO: remove
-        self.function_errors = {}  # Keep the funcs clean
-        self.states = salt.loader.states(self.opts,
-                self.functions,
-                self.utils,
-                self.serializers)
-        self.rend = salt.loader.render(self.opts, self.functions)
-#        self.matcher = Matcher(self.opts, self.functions)
-        self.matchers = salt.loader.matchers(self.opts)
-        self.functions['sys.reload_modules'] = self.gen_modules
-        self.executors = salt.loader.executors(self.opts, self.functions, proxy=self.proxy)
 
 
 class MasterMinion(object):
@@ -980,7 +960,8 @@ class MinionManager(MinionBase):
 
     @tornado.gen.coroutine
     def handle_event(self, package):
-        yield [minion.handle_event(package) for minion in self.minions]
+        for minion in self.minions:
+            minion.handle_event(package)
 
     def _create_minion_object(self, opts, timeout, safe,
                               io_loop=None, loaded_base_name=None,
@@ -1008,23 +989,18 @@ class MinionManager(MinionBase):
         '''
         Spawn all the coroutines which will sign in to masters
         '''
-        # Run masters discovery over SSDP. This may modify the whole configuration,
-        # depending of the networking and sets of masters. If match is 'any' we let
-        # eval_master handle the discovery instead so disconnections can also handle
-        # discovery
-        if isinstance(self.opts['discovery'], dict) and self.opts['discovery'].get('multimaster'):
-            self._discover_masters()
-
         masters = self.opts['master']
         if (self.opts['master_type'] in ('failover', 'distributed')) or not isinstance(self.opts['master'], list):
             masters = [masters]
 
-        self.opts['master_list'] = copy.deepcopy(masters)
-
+        beacons_leader = True
         for master in masters:
             s_opts = copy.deepcopy(self.opts)
             s_opts['master'] = master
             s_opts['multimaster'] = True
+            s_opts['beacons_leader'] = beacons_leader
+            if beacons_leader:
+                beacons_leader = False
             minion = self._create_minion_object(s_opts,
                                                 s_opts['auth_timeout'],
                                                 False,
@@ -1039,19 +1015,10 @@ class MinionManager(MinionBase):
         '''
         Create a minion, and asynchronously connect it to a master
         '''
+        last = 0  # never have we signed in
         auth_wait = minion.opts['acceptance_wait_time']
         failed = False
         while True:
-            if failed:
-                if auth_wait < self.max_auth_wait:
-                    auth_wait += self.auth_wait
-                log.debug(
-                    "sleeping before reconnect attempt to %s [%d/%d]",
-                   minion.opts['master'],
-                    auth_wait,
-                    self.max_auth_wait,
-                )
-                yield tornado.gen.sleep(auth_wait)  # TODO: log?
             try:
                 if minion.opts.get('beacons_before_connect', False):
                     minion.setup_beacons(before_connect=True)
@@ -1067,6 +1034,10 @@ class MinionManager(MinionBase):
                     'Error while bringing up minion for multi-master. Is '
                     'master at %s responding?', minion.opts['master']
                 )
+                last = time.time()
+                if auth_wait < self.max_auth_wait:
+                    auth_wait += self.auth_wait
+                yield tornado.gen.sleep(auth_wait)  # TODO: log?
             except SaltMasterUnresolvableError:
                 err = 'Master address: \'{0}\' could not be resolved. Invalid or unresolveable address. ' \
                       'Set \'master\' value in minion config.'.format(minion.opts['master'])
@@ -1132,6 +1103,7 @@ class Minion(MinionBase):
 
         self._running = None
         self.win_proc = []
+        self.subprocess_list = salt.utils.process.SubprocessList()
         self.loaded_base_name = loaded_base_name
         self.connected = False
         self.restart = False
@@ -1480,8 +1452,6 @@ class Minion(MinionBase):
                 self._send_req_sync(load, timeout)
             except salt.exceptions.SaltReqTimeoutError:
                 log.info('fire_master failed: master could not be contacted. Request timed out.')
-                # very likely one of the masters is dead, status.master will flush it
-                self.functions['status.master'](self.opts['master'])
                 return False
             except Exception:
                 log.info('fire_master failed: %s', traceback.format_exc())
@@ -1490,8 +1460,6 @@ class Minion(MinionBase):
             if timeout_handler is None:
                 def handle_timeout(*_):
                     log.info('fire_master failed: master could not be contacted. Request timed out.')
-                    # very likely one of the masters is dead, status.master will flush it
-                    self.functions['status.master'](self.opts['master'])
                     return True
                 timeout_handler = handle_timeout
 
@@ -1537,16 +1505,11 @@ class Minion(MinionBase):
                 self.schedule.returners = self.returners
 
         process_count_max = self.opts.get('process_count_max')
-        process_count_max_sleep_secs = self.opts.get('process_count_max_sleep_secs')
         if process_count_max > 0:
             process_count = len(salt.utils.minion.running(self.opts))
             while process_count >= process_count_max:
-                log.warning('Maximum number of processes (%s) reached while '
-                            'executing jid %s, waiting %s seconds...',
-                            process_count_max,
-                            data['jid'],
-                            process_count_max_sleep_secs)
-                yield tornado.gen.sleep(process_count_max_sleep_secs)
+                log.warning("Maximum number of processes reached while executing jid %s, waiting...", data['jid'])
+                yield tornado.gen.sleep(10)
                 process_count = len(salt.utils.minion.running(self.opts))
 
         # We stash an instance references to allow for the socket
@@ -1562,9 +1525,7 @@ class Minion(MinionBase):
                 instance = None
             with default_signals(signal.SIGINT, signal.SIGTERM):
                 process = SignalHandlingMultiprocessingProcess(
-                    target=self._target,
-                    name='ProcessPayload',
-                    args=(instance, self.opts, data, self.connected)
+                    target=self._target, args=(instance, self.opts, data, self.connected)
                 )
         else:
             process = threading.Thread(
@@ -1580,13 +1541,8 @@ class Minion(MinionBase):
                 process.start()
         else:
             process.start()
-
-        # TODO: remove the windows specific check?
-        if multiprocessing_enabled and not salt.utils.platform.is_windows():
-            # we only want to join() immediately if we are daemonizing a process
-            process.join()
-        elif salt.utils.platform.is_windows():
-            self.win_proc.append(process)
+        process.name = '{}-Job-{}'.format(process.name, data['jid'])
+        self.subprocess_list.add(process)
 
     def ctx(self):
         '''
@@ -1643,16 +1599,8 @@ class Minion(MinionBase):
         This method should be used as a threading target, start the actual
         minion side execution.
         '''
+        minion_instance.gen_modules()
         fn_ = os.path.join(minion_instance.proc_dir, data['jid'])
-
-        if opts['multiprocessing'] and not salt.utils.platform.is_windows():
-            # Shutdown the multiprocessing before daemonizing
-            salt.log.setup.shutdown_multiprocessing_logging()
-
-            salt.utils.process.daemonize_if(opts)
-
-            # Reconfigure multiprocessing logging after daemonizing
-            salt.log.setup.setup_multiprocessing_logging()
 
         salt.utils.process.appendproctitle('{0}._thread_return {1}'.format(cls.__name__, data['jid']))
 
@@ -1866,16 +1814,8 @@ class Minion(MinionBase):
         This method should be used as a threading target, start the actual
         minion side execution.
         '''
+        minion_instance.gen_modules()
         fn_ = os.path.join(minion_instance.proc_dir, data['jid'])
-
-        if opts['multiprocessing'] and not salt.utils.platform.is_windows():
-            # Shutdown the multiprocessing before daemonizing
-            salt.log.setup.shutdown_multiprocessing_logging()
-
-            salt.utils.process.daemonize_if(opts)
-
-            # Reconfigure multiprocessing logging after daemonizing
-            salt.log.setup.setup_multiprocessing_logging()
 
         salt.utils.process.appendproctitle('{0}._thread_multi_return {1}'.format(cls.__name__, data['jid']))
 
@@ -2228,6 +2168,8 @@ class Minion(MinionBase):
         '''
         Refresh the functions and returners.
         '''
+        if not self.beacons_leader:
+            return
         log.debug('Refreshing beacons.')
         self.beacons = salt.beacons.Beacon(self.opts, self.functions)
 
@@ -2240,12 +2182,12 @@ class Minion(MinionBase):
 
     # TODO: only allow one future in flight at a time?
     @tornado.gen.coroutine
-    def pillar_refresh(self, force_refresh=False, notify=False):
+    def pillar_refresh(self, force_refresh=False):
         '''
         Refresh the pillar
         '''
         if self.connected:
-            log.debug('Refreshing pillar. Notify: %s', notify)
+            log.debug('Refreshing pillar')
             async_pillar = salt.pillar.get_async_pillar(
                 self.opts,
                 self.opts['grains'],
@@ -2255,18 +2197,17 @@ class Minion(MinionBase):
             )
             try:
                 self.opts['pillar'] = yield async_pillar.compile_pillar()
-                if notify:
-                    evt = salt.utils.event.get_event('minion', opts=self.opts, listen=False)
-                    evt.fire_event({'complete': True}, tag=salt.defaults.events.MINION_PILLAR_COMPLETE)
             except SaltClientError:
                 # Do not exit if a pillar refresh fails.
                 log.error('Pillar data could not be refreshed. '
                           'One or more masters may be down!')
             finally:
                 async_pillar.destroy()
-        self.module_refresh(force_refresh, notify)
+        self.module_refresh(force_refresh)
         self.matchers_refresh()
         self.beacons_refresh()
+        evt = salt.utils.event.get_event('minion', opts=self.opts)
+        evt.fire_event({'complete': True}, tag='/salt/minion/minion_pillar_refresh_complete')
 
     def manage_schedule(self, tag, data):
         '''
@@ -2278,66 +2219,70 @@ class Minion(MinionBase):
         where = data.get('where', None)
         persist = data.get('persist', None)
 
-        funcs = {'delete': ('delete_job', (name, persist)),
-                 'add': ('add_job', (schedule, persist)),
-                 'modify': ('modify_job',
-                            (name, schedule, persist)),
-                 'enable': ('enable_schedule', ()),
-                 'disable': ('disable_schedule', ()),
-                 'enable_job': ('enable_job', (name, persist)),
-                 'disable_job': ('disable_job', (name, persist)),
-                 'postpone_job': ('postpone_job', (name, data)),
-                 'skip_job': ('skip_job', (name, data)),
-                 'reload': ('reload', (schedule,)),
-                 'list': ('list', (where,)),
-                 'save_schedule': ('save_schedule', ()),
-                 'get_next_fire_time': ('get_next_fire_time',
-                                        (name,))}
-
-        # Call the appropriate schedule function
-        try:
-            alias, params = funcs.get(func)
-            getattr(self.schedule, alias)(*params)
-        except TypeError:
-            log.error('Function "%s" is unavailable in salt.utils.scheduler',
-                      func)
+        if func == 'delete':
+            self.schedule.delete_job(name, persist)
+        elif func == 'add':
+            self.schedule.add_job(schedule, persist)
+        elif func == 'modify':
+            self.schedule.modify_job(name, schedule, persist)
+        elif func == 'enable':
+            self.schedule.enable_schedule()
+        elif func == 'disable':
+            self.schedule.disable_schedule()
+        elif func == 'enable_job':
+            self.schedule.enable_job(name, persist)
+        elif func == 'run_job':
+            self.schedule.run_job(name)
+        elif func == 'disable_job':
+            self.schedule.disable_job(name, persist)
+        elif func == 'postpone_job':
+            self.schedule.postpone_job(name, data)
+        elif func == 'skip_job':
+            self.schedule.skip_job(name, data)
+        elif func == 'reload':
+            self.schedule.reload(schedule)
+        elif func == 'list':
+            self.schedule.list(where)
+        elif func == 'save_schedule':
+            self.schedule.save_schedule()
+        elif func == 'get_next_fire_time':
+            self.schedule.get_next_fire_time(name)
 
     def manage_beacons(self, tag, data):
         '''
         Manage Beacons
         '''
+        if not self.beacons_leader:
+            return
+
         func = data.get('func', None)
         name = data.get('name', None)
         beacon_data = data.get('beacon_data', None)
         include_pillar = data.get('include_pillar', None)
         include_opts = data.get('include_opts', None)
 
-        funcs = {'add': ('add_beacon', (name, beacon_data)),
-                 'modify': ('modify_beacon', (name, beacon_data)),
-                 'delete': ('delete_beacon', (name,)),
-                 'enable': ('enable_beacons', ()),
-                 'disable': ('disable_beacons', ()),
-                 'enable_beacon': ('enable_beacon', (name,)),
-                 'disable_beacon': ('disable_beacon', (name,)),
-                 'list': ('list_beacons', (include_opts,
-                                           include_pillar)),
-                 'list_available': ('list_available_beacons', ()),
-                 'validate_beacon': ('validate_beacon', (name,
-                                                         beacon_data)),
-                 'reset': ('reset', ())}
-
-        # Call the appropriate beacon function
-        try:
-            alias, params = funcs.get(func)
-            getattr(self.beacons, alias)(*params)
-        except AttributeError:
-            log.error('Function "%s" is unavailable in salt.beacons', func)
-        except TypeError as exc:
-            log.info(
-                'Failed to handle %s with data(%s). Error: %s',
-                tag, data, exc,
-                exc_info_on_loglevel=logging.DEBUG
-            )
+        if func == 'add':
+            self.beacons.add_beacon(name, beacon_data)
+        elif func == 'modify':
+            self.beacons.modify_beacon(name, beacon_data)
+        elif func == 'delete':
+            self.beacons.delete_beacon(name)
+        elif func == 'enable':
+            self.beacons.enable_beacons()
+        elif func == 'disable':
+            self.beacons.disable_beacons()
+        elif func == 'enable_beacon':
+            self.beacons.enable_beacon(name)
+        elif func == 'disable_beacon':
+            self.beacons.disable_beacon(name)
+        elif func == 'list':
+            self.beacons.list_beacons(include_opts, include_pillar)
+        elif func == 'list_available':
+            self.beacons.list_available_beacons()
+        elif func == 'validate_beacon':
+            self.beacons.validate_beacon(name, beacon_data)
+        elif func == 'reset':
+            self.beacons.reset()
 
     def environ_setenv(self, tag, data):
         '''
@@ -2402,256 +2347,6 @@ class Minion(MinionBase):
         finally:
             channel.close()
 
-    def _handle_tag_module_refresh(self, tag, data):
-        '''
-        Handle a module_refresh event
-        '''
-        self.module_refresh(
-            force_refresh=data.get('force_refresh', False),
-            notify=data.get('notify', False)
-        )
-
-    @tornado.gen.coroutine
-    def _handle_tag_pillar_refresh(self, tag, data):
-        '''
-        Handle a pillar_refresh event
-        '''
-        yield self.pillar_refresh(
-            force_refresh=data.get('force_refresh', False),
-            notify=data.get('notify', False)
-        )
-
-    def _handle_tag_beacons_refresh(self, tag, data):
-        '''
-        Handle a beacon_refresh event
-        '''
-        self.beacons_refresh()
-
-    def _handle_tag_matchers_refresh(self, tag, data):
-        '''
-        Handle a matchers_refresh event
-        '''
-        self.matchers_refresh()
-
-    def _handle_tag_manage_schedule(self, tag, data):
-        '''
-        Handle a manage_schedule event
-        '''
-        self.manage_schedule(tag, data)
-
-    def _handle_tag_manage_beacons(self, tag, data):
-        '''
-        Handle a manage_beacons event
-        '''
-        self.manage_beacons(tag, data)
-
-    def _handle_tag_grains_refresh(self, tag, data):
-        '''
-        Handle a grains_refresh event
-        '''
-        if (data.get('force_refresh', False) or
-                self.grains_cache != self.opts['grains']):
-            self.pillar_refresh(force_refresh=True)
-            self.grains_cache = self.opts['grains']
-
-    def _handle_tag_environ_setenv(self, tag, data):
-        '''
-        Handle a environ_setenv event
-        '''
-        self.environ_setenv(tag, data)
-
-    def _handle_tag_minion_mine(self, tag, data):
-        '''
-        Handle a _minion_mine event
-        '''
-        self._mine_send(tag, data)
-
-    def _handle_tag_fire_master(self, tag, data):
-        '''
-        Handle a fire_master event
-        '''
-        if self.connected:
-            log.debug('Forwarding master event tag=%s', data['tag'])
-            self._fire_master(data['data'], data['tag'], data['events'], data['pretag'])
-
-    def _handle_tag_master_disconnected_failback(self, tag, data):
-        '''
-        Handle a master_disconnected_failback event
-        '''
-        # if the master disconnect event is for a different master, raise an exception
-        if tag.startswith(master_event(type='disconnected')) and data['master'] != self.opts['master']:
-            # not mine master, ignore
-            return
-        if tag.startswith(master_event(type='failback')):
-            # if the master failback event is not for the top master, raise an exception
-            if data['master'] != self.opts['master_list'][0]:
-                raise SaltException('Bad master \'{0}\' when mine failback is \'{1}\''.format(
-                    data['master'], self.opts['master']))
-            # if the master failback event is for the current master, raise an exception
-            elif data['master'] == self.opts['master'][0]:
-                raise SaltException('Already connected to \'{0}\''.format(data['master']))
-
-        if self.connected:
-            # we are not connected anymore
-            self.connected = False
-            log.info('Connection to master %s lost', self.opts['master'])
-
-            # we can't use the config default here because the default '0' value is overloaded
-            # to mean 'if 0 disable the job', but when salt detects a timeout it also sets up
-            # these jobs
-            master_alive_interval = self.opts['master_alive_interval'] or 60
-
-            if self.opts['master_type'] != 'failover':
-                # modify the scheduled job to fire on reconnect
-                if self.opts['transport'] != 'tcp':
-                    schedule = {
-                       'function': 'status.master',
-                       'seconds': master_alive_interval,
-                       'jid_include': True,
-                       'maxrunning': 1,
-                       'return_job': False,
-                       'kwargs': {'master': self.opts['master'],
-                                   'connected': False}
-                    }
-                    self.schedule.modify_job(name=master_event(type='alive', master=self.opts['master']),
-                                             schedule=schedule)
-            else:
-                # delete the scheduled job to don't interfere with the failover process
-                if self.opts['transport'] != 'tcp':
-                    self.schedule.delete_job(name=master_event(type='alive', master=self.opts['master']),
-                                             persist=True)
-
-                log.info('Trying to tune in to next master from master-list')
-
-                if hasattr(self, 'pub_channel'):
-                    self.pub_channel.on_recv(None)
-                    if hasattr(self.pub_channel, 'auth'):
-                        self.pub_channel.auth.invalidate()
-                    if hasattr(self.pub_channel, 'close'):
-                        self.pub_channel.close()
-                    del self.pub_channel
-
-                # if eval_master finds a new master for us, self.connected
-                # will be True again on successful master authentication
-                try:
-                    master, self.pub_channel = yield self.eval_master(
-                                                        opts=self.opts,
-                                                        failed=True,
-                                                        failback=tag.startswith(master_event(type='failback')))
-                except SaltClientError:
-                    pass
-
-                if self.connected:
-                    self.opts['master'] = master
-
-                    # re-init the subsystems to work with the new master
-                    log.info(
-                        'Re-initialising subsystems for new master %s',
-                        self.opts['master']
-                    )
-                    # put the current schedule into the new loaders
-                    self.opts['schedule'] = self.schedule.option('schedule')
-                    self.functions, self.returners, self.function_errors, self.executors = self._load_modules()
-                    # make the schedule to use the new 'functions' loader
-                    self.schedule.functions = self.functions
-                    self.pub_channel.on_recv(self._handle_payload)
-                    self._fire_master_minion_start()
-                    log.info('Minion is ready to receive requests!')
-
-                    # update scheduled job to run with the new master addr
-                    if self.opts['transport'] != 'tcp':
-                        schedule = {
-                           'function': 'status.master',
-                           'seconds': master_alive_interval,
-                           'jid_include': True,
-                           'maxrunning': 1,
-                           'return_job': False,
-                           'kwargs': {'master': self.opts['master'],
-                                       'connected': True}
-                        }
-                        self.schedule.modify_job(name=master_event(type='alive', master=self.opts['master']),
-                                                 schedule=schedule)
-
-                        if self.opts['master_failback'] and 'master_list' in self.opts:
-                            if self.opts['master'] != self.opts['master_list'][0]:
-                                schedule = {
-                                   'function': 'status.ping_master',
-                                   'seconds': self.opts['master_failback_interval'],
-                                   'jid_include': True,
-                                   'maxrunning': 1,
-                                   'return_job': False,
-                                   'kwargs': {'master': self.opts['master_list'][0]}
-                                }
-                                self.schedule.modify_job(name=master_event(type='failback'),
-                                                         schedule=schedule)
-                            else:
-                                self.schedule.delete_job(name=master_event(type='failback'), persist=True)
-                else:
-                    self.restart = True
-                    self.io_loop.stop()
-
-    def _handle_tag_master_connected(self, tag, data):
-        '''
-        Handle a master_connected event
-        '''
-        # handle this event only once. otherwise it will pollute the log
-        # also if master type is failover all the reconnection work is done
-        # by `disconnected` event handler and this event must never happen,
-        # anyway check it to be sure
-        if not self.connected and self.opts['master_type'] != 'failover':
-            log.info('Connection to master %s re-established', self.opts['master'])
-            self.connected = True
-            # modify the __master_alive job to only fire,
-            # if the connection is lost again
-            if self.opts['transport'] != 'tcp':
-                if self.opts['master_alive_interval'] > 0:
-                    schedule = {
-                       'function': 'status.master',
-                       'seconds': self.opts['master_alive_interval'],
-                       'jid_include': True,
-                       'maxrunning': 1,
-                       'return_job': False,
-                       'kwargs': {'master': self.opts['master'],
-                                   'connected': True}
-                    }
-
-                    self.schedule.modify_job(name=master_event(type='alive', master=self.opts['master']),
-                                             schedule=schedule)
-                else:
-                    self.schedule.delete_job(name=master_event(type='alive', master=self.opts['master']), persist=True)
-
-    def _handle_tag_schedule_return(self, tag, data):
-        '''
-        Handle a _schedule_return event
-        '''
-        # reporting current connection with master
-        if data['schedule'].startswith(master_event(type='alive', master='')):
-            if data['return']:
-                log.debug(
-                    'Connected to master %s',
-                    data['schedule'].split(master_event(type='alive', master=''))[1]
-                )
-        self._return_pub(data, ret_cmd='_return', sync=False)
-
-    def _handle_tag_salt_error(self, tag, data):
-        '''
-        Handle a _salt_error event
-        '''
-        if self.connected:
-            log.debug('Forwarding salt error event tag=%s', tag)
-            self._fire_master(data, tag)
-
-    def _handle_tag_salt_auth_creds(self, tag, data):
-        '''
-        Handle a salt_auth_creds event
-        '''
-        key = tuple(data['key'])
-        log.debug(
-            'Updating auth data for %s: %s -> %s',
-            key, salt.crypt.AsyncAuth.creds_map.get(key), data['creds']
-        )
-        salt.crypt.AsyncAuth.creds_map[tuple(data['key'])] = data['creds']
-
     @tornado.gen.coroutine
     def handle_event(self, package):
         '''
@@ -2664,48 +2359,200 @@ class Minion(MinionBase):
             'Minion of \'%s\' is handling event tag \'%s\'',
             self.opts['master'], tag
         )
-        tag_functions = {
-                         'beacons_refresh': self._handle_tag_beacons_refresh,
-                         'environ_setenv': self._handle_tag_environ_setenv,
-                         'fire_master': self._handle_tag_fire_master,
-                         'grains_refresh': self._handle_tag_grains_refresh,
-                         'matchers_refresh': self._handle_tag_matchers_refresh,
-                         'manage_schedule': self._handle_tag_manage_schedule,
-                         'manage_beacons': self._handle_tag_manage_beacons,
-                         '_minion_mine': self._handle_tag_minion_mine,
-                         'module_refresh': self._handle_tag_module_refresh,
-                         'pillar_refresh': self._handle_tag_pillar_refresh,
-                         'salt/auth/creds': self._handle_tag_salt_auth_creds,
-                         '_salt_error': self._handle_tag_salt_error,
-                         '__schedule_return': self._handle_tag_schedule_return,
-                         master_event(type='disconnected'): self._handle_tag_master_disconnected_failback,
-                         master_event(type='failback'): self._handle_tag_master_disconnected_failback,
-                         master_event(type='connected'): self._handle_tag_master_connected,
-                         }
+        if tag.startswith('module_refresh'):
+            self.module_refresh(
+                force_refresh=data.get('force_refresh', False),
+                notify=data.get('notify', False)
+            )
+        elif tag.startswith('pillar_refresh'):
+            yield self.pillar_refresh(
+                force_refresh=data.get('force_refresh', False)
+            )
+        elif tag.startswith('beacons_refresh'):
+            self.beacons_refresh()
+        elif tag.startswith('matchers_refresh'):
+            self.matchers_refresh()
+        elif tag.startswith('manage_schedule'):
+            self.manage_schedule(tag, data)
+        elif tag.startswith('manage_beacons'):
+            self.manage_beacons(tag, data)
+        elif tag.startswith('grains_refresh'):
+            if (data.get('force_refresh', False) or
+                    self.grains_cache != self.opts['grains']):
+                self.pillar_refresh(force_refresh=True)
+                self.grains_cache = self.opts['grains']
+        elif tag.startswith('environ_setenv'):
+            self.environ_setenv(tag, data)
+        elif tag.startswith('_minion_mine'):
+            self._mine_send(tag, data)
+        elif tag.startswith('fire_master'):
+            if self.connected:
+                log.debug('Forwarding master event tag=%s', data['tag'])
+                self._fire_master(data['data'], data['tag'], data['events'], data['pretag'], sync=False)
+        elif tag.startswith(master_event(type='disconnected')) or tag.startswith(master_event(type='failback')):
+            # if the master disconnect event is for a different master, raise an exception
+            if tag.startswith(master_event(type='disconnected')) and data['master'] != self.opts['master']:
+                # not mine master, ignore
+                raise tornado.gen.Return()
+            if tag.startswith(master_event(type='failback')):
+                # if the master failback event is not for the top master, raise an exception
+                if data['master'] != self.opts['master_list'][0]:
+                    raise SaltException('Bad master \'{0}\' when mine failback is \'{1}\''.format(
+                        data['master'], self.opts['master']))
+                # if the master failback event is for the current master, raise an exception
+                elif data['master'] == self.opts['master'][0]:
+                    raise SaltException('Already connected to \'{0}\''.format(data['master']))
 
-        # Run the appropriate function
-        for tag_function in tag_functions:
-            if tag.startswith(tag_function):
-                tag_functions[tag_function](tag, data)
+            if self.connected:
+                # we are not connected anymore
+                self.connected = False
+                log.info('Connection to master %s lost', self.opts['master'])
 
-    def _fallback_cleanups(self):
+                if self.opts['master_type'] != 'failover':
+                    # modify the scheduled job to fire on reconnect
+                    if self.opts['transport'] != 'tcp':
+                        schedule = {
+                           'function': 'status.master',
+                           'seconds': self.opts['master_alive_interval'],
+                           'jid_include': True,
+                           'maxrunning': 1,
+                           'return_job': False,
+                           'kwargs': {'master': self.opts['master'],
+                                       'connected': False}
+                        }
+                        self.schedule.modify_job(name=master_event(type='alive', master=self.opts['master']),
+                                                 schedule=schedule)
+                else:
+                    # delete the scheduled job to don't interfere with the failover process
+                    if self.opts['transport'] != 'tcp':
+                        self.schedule.delete_job(name=master_event(type='alive'))
+
+                    log.info('Trying to tune in to next master from master-list')
+
+                    if hasattr(self, 'pub_channel'):
+                        self.pub_channel.on_recv(None)
+                        if hasattr(self.pub_channel, 'auth'):
+                            self.pub_channel.auth.invalidate()
+                        if hasattr(self.pub_channel, 'close'):
+                            self.pub_channel.close()
+                        del self.pub_channel
+
+                    # if eval_master finds a new master for us, self.connected
+                    # will be True again on successful master authentication
+                    try:
+                        master, self.pub_channel = yield self.eval_master(
+                                                            opts=self.opts,
+                                                            failed=True,
+                                                            failback=tag.startswith(master_event(type='failback')))
+                    except SaltClientError:
+                        pass
+
+                    if self.connected:
+                        self.opts['master'] = master
+
+                        # re-init the subsystems to work with the new master
+                        log.info(
+                            'Re-initialising subsystems for new master %s',
+                            self.opts['master']
+                        )
+                        # put the current schedule into the new loaders
+                        self.opts['schedule'] = self.schedule.option('schedule')
+                        self.functions, self.returners, self.function_errors, self.executors = self._load_modules()
+                        # make the schedule to use the new 'functions' loader
+                        self.schedule.functions = self.functions
+                        self.pub_channel.on_recv(self._handle_payload)
+                        self._fire_master_minion_start()
+                        log.info('Minion is ready to receive requests!')
+
+                        # update scheduled job to run with the new master addr
+                        if self.opts['transport'] != 'tcp':
+                            schedule = {
+                               'function': 'status.master',
+                               'seconds': self.opts['master_alive_interval'],
+                               'jid_include': True,
+                               'maxrunning': 1,
+                               'return_job': False,
+                               'kwargs': {'master': self.opts['master'],
+                                           'connected': True}
+                            }
+                            self.schedule.modify_job(name=master_event(type='alive', master=self.opts['master']),
+                                                     schedule=schedule)
+
+                            if self.opts['master_failback'] and 'master_list' in self.opts:
+                                if self.opts['master'] != self.opts['master_list'][0]:
+                                    schedule = {
+                                       'function': 'status.ping_master',
+                                       'seconds': self.opts['master_failback_interval'],
+                                       'jid_include': True,
+                                       'maxrunning': 1,
+                                       'return_job': False,
+                                       'kwargs': {'master': self.opts['master_list'][0]}
+                                    }
+                                    self.schedule.modify_job(name=master_event(type='failback'),
+                                                             schedule=schedule)
+                                else:
+                                    self.schedule.delete_job(name=master_event(type='failback'), persist=True)
+                    else:
+                        self.restart = True
+                        self.io_loop.stop()
+
+        elif tag.startswith(master_event(type='connected')):
+            # handle this event only once. otherwise it will pollute the log
+            # also if master type is failover all the reconnection work is done
+            # by `disconnected` event handler and this event must never happen,
+            # anyway check it to be sure
+            if not self.connected and self.opts['master_type'] != 'failover':
+                log.info('Connection to master %s re-established', self.opts['master'])
+                self.connected = True
+                # modify the __master_alive job to only fire,
+                # if the connection is lost again
+                if self.opts['transport'] != 'tcp':
+                    schedule = {
+                       'function': 'status.master',
+                       'seconds': self.opts['master_alive_interval'],
+                       'jid_include': True,
+                       'maxrunning': 1,
+                       'return_job': False,
+                       'kwargs': {'master': self.opts['master'],
+                                   'connected': True}
+                    }
+
+                    self.schedule.modify_job(name=master_event(type='alive', master=self.opts['master']),
+                                             schedule=schedule)
+        elif tag.startswith('__schedule_return'):
+            # reporting current connection with master
+            if data['schedule'].startswith(master_event(type='alive', master='')):
+                if data['return']:
+                    log.debug(
+                        'Connected to master %s',
+                        data['schedule'].split(master_event(type='alive', master=''))[1]
+                    )
+            self._return_pub(data, ret_cmd='_return', sync=False)
+        elif tag.startswith('_salt_error'):
+            if self.connected:
+                log.debug('Forwarding salt error event tag=%s', tag)
+                self._fire_master(data, tag, sync=False)
+        elif tag.startswith('salt/auth/creds'):
+            key = tuple(data['key'])
+            log.debug(
+                'Updating auth data for %s: %s -> %s',
+                key, salt.crypt.AsyncAuth.creds_map.get(key), data['creds']
+            )
+            salt.crypt.AsyncAuth.creds_map[tuple(data['key'])] = data['creds']
+        elif tag.startswith('__beacons_return'):
+            if self.connected:
+                log.debug('Firing beacons to master')
+                self._fire_master(events=data['beacons'])
+
+    def cleanup_subprocesses(self):
         '''
-        Fallback cleanup routines, attempting to fix leaked processes, threads, etc.
+        Clean up subprocesses and spawned threads.
         '''
         # Add an extra fallback in case a forked process leaks through
         multiprocessing.active_children()
-
-        # Cleanup Windows threads
-        if not salt.utils.platform.is_windows():
-            return
-        for thread in self.win_proc:
-            if not thread.is_alive():
-                thread.join()
-                try:
-                    self.win_proc.remove(thread)
-                    del thread
-                except (ValueError, NameError):
-                    pass
+        self.subprocess_list.cleanup()
+        if self.schedule:
+            self.schedule.cleanup_subprocesses()
 
     def _setup_core(self):
         '''
@@ -2719,7 +2566,8 @@ class Minion(MinionBase):
             self.mod_opts = self._prep_mod_opts()
 #            self.matcher = Matcher(self.opts, self.functions)
             self.matchers = salt.loader.matchers(self.opts)
-            self.beacons = salt.beacons.Beacon(self.opts, self.functions)
+            if self.beacons_leader:
+                self.beacons = salt.beacons.Beacon(self.opts, self.functions)
             uid = salt.utils.user.get_uid(user=self.opts.get('user', None))
             self.proc_dir = get_proc_dir(self.opts['cachedir'], uid=uid)
             self.grains_cache = self.opts['grains']
@@ -2730,11 +2578,12 @@ class Minion(MinionBase):
         Set up the beacons.
         This is safe to call multiple times.
         '''
+        # In multimaster configuration the only one minion shall execute beacons
+        if not self.beacons_leader:
+            return
+
         self._setup_core()
-
         loop_interval = self.opts['loop_interval']
-        new_periodic_callbacks = {}
-
         if 'beacons' not in self.periodic_callbacks:
             self.beacons = salt.beacons.Beacon(self.opts, self.functions)
 
@@ -2745,24 +2594,18 @@ class Minion(MinionBase):
                     beacons = self.process_beacons(self.functions)
                 except Exception:
                     log.critical('The beacon errored: ', exc_info=True)
-                if beacons and self.connected:
-                    self._fire_master(events=beacons)
+                if beacons:
+                    event = salt.utils.event.get_event('minion',
+                                                       opts=self.opts,
+                                                       listen=False)
+                    event.fire_event({'beacons': beacons}, '__beacons_return')
+                    event.destroy()
 
-            new_periodic_callbacks['beacons'] = tornado.ioloop.PeriodicCallback(
-                    handle_beacons, loop_interval * 1000)
             if before_connect:
                 # Make sure there is a chance for one iteration to occur before connect
                 handle_beacons()
 
-        if 'cleanup' not in self.periodic_callbacks:
-            new_periodic_callbacks['cleanup'] = tornado.ioloop.PeriodicCallback(
-                    self._fallback_cleanups, loop_interval * 1000)
-
-        # start all the other callbacks
-        for periodic_cb in six.itervalues(new_periodic_callbacks):
-            periodic_cb.start()
-
-        self.periodic_callbacks.update(new_periodic_callbacks)
+            self.add_periodic_callback('beacons', handle_beacons)
 
     def setup_scheduler(self, before_connect=False):
         '''
@@ -2772,7 +2615,6 @@ class Minion(MinionBase):
         self._setup_core()
 
         loop_interval = self.opts['loop_interval']
-        new_periodic_callbacks = {}
 
         if 'schedule' not in self.periodic_callbacks:
             if 'schedule' not in self.opts:
@@ -2801,21 +2643,36 @@ class Minion(MinionBase):
             # TODO: actually listen to the return and change period
             def handle_schedule():
                 self.process_schedule(self, loop_interval)
-            new_periodic_callbacks['schedule'] = tornado.ioloop.PeriodicCallback(handle_schedule, 1000)
 
             if before_connect:
                 # Make sure there is a chance for one iteration to occur before connect
                 handle_schedule()
 
-        if 'cleanup' not in self.periodic_callbacks:
-            new_periodic_callbacks['cleanup'] = tornado.ioloop.PeriodicCallback(
-                    self._fallback_cleanups, loop_interval * 1000)
+            self.add_periodic_callback('schedule', handle_schedule)
 
-        # start all the other callbacks
-        for periodic_cb in six.itervalues(new_periodic_callbacks):
-            periodic_cb.start()
+    def add_periodic_callback(self, name, method, interval=1):
+        '''
+        Add a periodic callback to the event loop and call it's start method.
+        If a callback by the given name exists this method returns False
+        '''
+        if name in self.periodic_callbacks:
+            return False
+        self.periodic_callbacks[name] = tornado.ioloop.PeriodicCallback(
+            method, interval * 1000,
+        )
+        self.periodic_callbacks[name].start()
+        return True
 
-        self.periodic_callbacks.update(new_periodic_callbacks)
+    def remove_periodic_callback(self, name):
+        '''
+        Remove a periodic callback.
+        If a callback by the given name does not exist this method returns False
+        '''
+        callback = self.periodic_callbacks.pop(name, None)
+        if callback is None:
+            return False
+        callback.stop()
+        return True
 
     # Main Minion Tune In
     def tune_in(self, start=True):
@@ -2849,6 +2706,7 @@ class Minion(MinionBase):
 
         self.setup_beacons()
         self.setup_scheduler()
+        self.add_periodic_callback('cleanup', self.cleanup_subprocesses)
 
         # schedule the stuff that runs every interval
         ping_interval = self.opts.get('ping_interval', 0) * 60
@@ -2875,8 +2733,8 @@ class Minion(MinionBase):
                     self._fire_master('ping', 'minion_ping', sync=False, timeout_handler=ping_timeout_handler)
                 except Exception:
                     log.warning('Attempt to ping master failed.', exc_on_loglevel=logging.DEBUG)
-            self.periodic_callbacks['ping'] = tornado.ioloop.PeriodicCallback(ping_master, ping_interval * 1000)
-            self.periodic_callbacks['ping'].start()
+            self.remove_periodic_callback('ping')
+            self.add_periodic_callback('ping', ping_master, ping_interval)
 
         # add handler to subscriber
         if hasattr(self, 'pub_channel') and self.pub_channel is not None:
@@ -3167,19 +3025,10 @@ class SyndicManager(MinionBase):
         '''
         Create a syndic, and asynchronously connect it to a master
         '''
+        last = 0  # never have we signed in
         auth_wait = opts['acceptance_wait_time']
         failed = False
         while True:
-            if failed:
-                if auth_wait < self.max_auth_wait:
-                    auth_wait += self.auth_wait
-                log.debug(
-                    "sleeping before reconnect attempt to %s [%d/%d]",
-                    opts['master'],
-                    auth_wait,
-                    self.max_auth_wait,
-                )
-                yield tornado.gen.sleep(auth_wait)  # TODO: log?
             log.debug(
                 'Syndic attempting to connect to %s',
                 opts['master']
@@ -3208,6 +3057,10 @@ class SyndicManager(MinionBase):
                     'Error while bringing up syndic for multi-syndic. Is the '
                     'master at %s responding?', opts['master']
                 )
+                last = time.time()
+                if auth_wait < self.max_auth_wait:
+                    auth_wait += self.auth_wait
+                yield tornado.gen.sleep(auth_wait)  # TODO: log?
             except (KeyboardInterrupt, SystemExit):
                 raise
             except Exception:
@@ -3460,11 +3313,9 @@ def _metaproxy_call(opts, fn_name):
         metaproxy_name = opts['metaproxy']
     except KeyError:
         metaproxy_name = 'proxy'
-        log.trace(
-            'No metaproxy key found in opts for id %s. '
-            'Defaulting to standard proxy minion.',
-            opts['id']
-        )
+        errmsg = 'No metaproxy key found in opts for id ' + opts['id'] + '. ' + \
+                 'Defaulting to standard proxy minion'
+        log.trace(errmsg)
 
     metaproxy_fn = metaproxy_name + '.' + fn_name
     return metaproxy[metaproxy_fn]

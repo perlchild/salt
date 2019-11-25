@@ -26,18 +26,6 @@ from __future__ import absolute_import, print_function, unicode_literals
 import os
 import sys
 import logging
-from unittest import (
-    TestLoader as _TestLoader,
-    TextTestRunner as _TextTestRunner,
-    TestCase as _TestCase,
-    expectedFailure,
-    TestSuite as _TestSuite,
-    skip,
-    skipIf as _skipIf,
-    TestResult,
-    TextTestResult as _TextTestResult
-)
-from unittest.case import _id, SkipTest
 from salt.ext import six
 try:
     import psutil
@@ -51,7 +39,6 @@ log = logging.getLogger(__name__)
 # process details when running in verbose mode
 # i.e. [CPU:15.1%|MEM:48.3%|Z:0]
 SHOW_PROC = 'NO_SHOW_PROC' not in os.environ
-WAR_ROOM_SKIP = os.environ.get('WAR_ROOM_SKIP', 'true').lower() == 'true'
 
 LOREM_IPSUM = '''\
 Lorem ipsum dolor sit amet, consectetur adipiscing elit. Quisque eget urna a arcu lacinia sagittis.
@@ -63,6 +50,67 @@ Quisque cursus odio tortor. In consequat augue nisl, eget lacinia odio vestibulu
 Donec venenatis elementum arcu at rhoncus. Nunc pharetra erat in lacinia convallis. Ut condimentum
 eu mauris sit amet convallis. Morbi vulputate vel odio non laoreet. Nullam in suscipit tellus.
 Sed quis posuere urna.'''
+
+# support python < 2.7 via unittest2
+if sys.version_info < (2, 7):
+    try:
+        # pylint: disable=import-error
+        from unittest2 import (
+            TestLoader as __TestLoader,
+            TextTestRunner as __TextTestRunner,
+            TestCase as __TestCase,
+            expectedFailure,
+            TestSuite as __TestSuite,
+            skip,
+            skipIf,
+            TestResult as _TestResult,
+            TextTestResult as __TextTestResult
+        )
+        from unittest2.case import _id, SkipTest
+        # pylint: enable=import-error
+
+        class NewStyleClassMixin(object):
+            '''
+            Simple new style class to make pylint shut up!
+
+            And also to avoid errors like:
+
+                'Cannot create a consistent method resolution order (MRO) for bases'
+            '''
+
+        class _TestLoader(__TestLoader, NewStyleClassMixin):
+            pass
+
+        class _TextTestRunner(__TextTestRunner, NewStyleClassMixin):
+            pass
+
+        class _TestCase(__TestCase, NewStyleClassMixin):
+            pass
+
+        class _TestSuite(__TestSuite, NewStyleClassMixin):
+            pass
+
+        class TestResult(_TestResult, NewStyleClassMixin):
+            pass
+
+        class _TextTestResult(__TextTestResult, NewStyleClassMixin):
+            pass
+
+    except ImportError:
+        raise SystemExit('You need to install unittest2 to run the salt tests')
+else:
+    from unittest import (
+        TestLoader as _TestLoader,
+        TextTestRunner as _TextTestRunner,
+        TestCase as _TestCase,
+        expectedFailure,
+        TestSuite as _TestSuite,
+        skip,
+        skipIf,
+        TestResult,
+        TextTestResult as _TextTestResult
+    )
+    from unittest.case import _id, SkipTest
 
 
 class TestSuite(_TestSuite):
@@ -366,11 +414,11 @@ class TextTestResult(_TextTestResult):
     '''
 
     def startTest(self, test):
-        log.debug('>>>>> START >>>>> %s', test.id())
+        log.debug('>>>>> START >>>>> {0}'.format(test.id()))
         return super(TextTestResult, self).startTest(test)
 
     def stopTest(self, test):
-        log.debug('<<<<< END <<<<<<< %s', test.id())
+        log.debug('<<<<< END <<<<<<< {0}'.format(test.id()))
         return super(TextTestResult, self).stopTest(test)
 
 
@@ -379,14 +427,6 @@ class TextTestRunner(_TextTestRunner):
     Custom Text tests runner to log the start and the end of a test case
     '''
     resultclass = TextTestResult
-
-
-def skipIf(skip, reason):
-    from tests.support.runtests import RUNTIME_VARS
-    if RUNTIME_VARS.PYTEST_SESSION:
-        import pytest
-        return pytest.mark.skipif(skip, reason=reason)
-    return _skipIf(skip, reason)
 
 
 __all__ = [

@@ -8,10 +8,9 @@ import tempfile
 import textwrap
 
 # Import Salt Testing libs
-from tests.support.runtests import RUNTIME_VARS
 from tests.support.case import ShellCase
+from tests.support.paths import TMP
 from tests.support.mixins import ShellCaseCommonTestsMixin
-from tests.support.helpers import skip_if_not_root, destructiveTest
 
 # Import 3rd-party libs
 from salt.ext import six
@@ -19,7 +18,6 @@ from salt.ext import six
 # Import Salt libs
 import salt.utils.files
 import salt.utils.platform
-from tests.support.unit import skipIf, WAR_ROOM_SKIP  # WAR ROOM temp import
 import salt.utils.yaml
 
 USERA = 'saltdev'
@@ -27,7 +25,6 @@ USERA_PWD = 'saltdev'
 HASHED_USERA_PWD = '$6$SALTsalt$ZZFD90fKFWq8AGmmX0L3uBtS9fXL62SrTk5zcnQ6EkD6zoiM3kB88G1Zvs0xm/gZ7WXJRs5nsTBybUvGSqZkT.'
 
 
-@skipIf(WAR_ROOM_SKIP, 'WAR ROOM TEMPORARY SKIP')
 class KeyTest(ShellCase, ShellCaseCommonTestsMixin):
     '''
     Test salt-key script
@@ -118,6 +115,14 @@ class KeyTest(ShellCase, ShellCaseCommonTestsMixin):
                 'Unaccepted Keys:',
                 'Rejected Keys:'
             ]
+        elif self.master_opts['transport'] == 'raet':
+            expect = [
+                'Accepted Keys:',
+                'minion',
+                'sub_minion',
+                'Unaccepted Keys:',
+                'Rejected Keys:'
+            ]
         self.assertEqual(data, expect)
 
     def test_list_json_out(self):
@@ -138,6 +143,10 @@ class KeyTest(ShellCase, ShellCaseCommonTestsMixin):
                       'minions_denied': [],
                       'minions_pre': [],
                       'minions': ['minion', 'sub_minion']}
+        elif self.master_opts['transport'] == 'raet':
+            expect = {'accepted': ['minion', 'sub_minion'],
+                      'rejected': [],
+                      'pending': []}
         self.assertEqual(ret, expect)
 
     def test_list_yaml_out(self):
@@ -158,6 +167,10 @@ class KeyTest(ShellCase, ShellCaseCommonTestsMixin):
                       'minions_denied': [],
                       'minions_pre': [],
                       'minions': ['minion', 'sub_minion']}
+        elif self.master_opts['transport'] == 'raet':
+            expect = {'accepted': ['minion', 'sub_minion'],
+                      'rejected': [],
+                      'pending': []}
         self.assertEqual(ret, expect)
 
     def test_list_raw_out(self):
@@ -180,6 +193,10 @@ class KeyTest(ShellCase, ShellCaseCommonTestsMixin):
                       'minions_denied': [],
                       'minions_pre': [],
                       'minions': ['minion', 'sub_minion']}
+        elif self.master_opts['transport'] == 'raet':
+            expect = {'accepted': ['minion', 'sub_minion'],
+                      'rejected': [],
+                      'pending': []}
         self.assertEqual(ret, expect)
 
     def test_list_acc(self):
@@ -190,8 +207,6 @@ class KeyTest(ShellCase, ShellCaseCommonTestsMixin):
         expect = ['Accepted Keys:', 'minion', 'sub_minion']
         self.assertEqual(data, expect)
 
-    @skip_if_not_root
-    @destructiveTest
     def test_list_acc_eauth(self):
         '''
         test salt-key -l with eauth
@@ -202,8 +217,6 @@ class KeyTest(ShellCase, ShellCaseCommonTestsMixin):
         self.assertEqual(data, expect)
         self._remove_user()
 
-    @skip_if_not_root
-    @destructiveTest
     def test_list_acc_eauth_bad_creds(self):
         '''
         test salt-key -l with eauth and bad creds
@@ -231,13 +244,15 @@ class KeyTest(ShellCase, ShellCaseCommonTestsMixin):
         self.assertEqual(data, expect)
 
     def test_keys_generation(self):
-        tempdir = tempfile.mkdtemp(dir=RUNTIME_VARS.TMP)
+        tempdir = tempfile.mkdtemp(dir=TMP)
         arg_str = '--gen-keys minibar --gen-keys-dir {0}'.format(tempdir)
         self.run_key(arg_str)
         try:
             key_names = None
             if self.master_opts['transport'] in ('zeromq', 'tcp'):
                 key_names = ('minibar.pub', 'minibar.pem')
+            elif self.master_opts['transport'] == 'raet':
+                key_names = ('minibar.key',)
             for fname in key_names:
                 self.assertTrue(os.path.isfile(os.path.join(tempdir, fname)))
         finally:
@@ -247,51 +262,22 @@ class KeyTest(ShellCase, ShellCaseCommonTestsMixin):
             shutil.rmtree(tempdir)
 
     def test_keys_generation_keysize_minmax(self):
-        tempdir = tempfile.mkdtemp(dir=RUNTIME_VARS.TMP)
+        tempdir = tempfile.mkdtemp(dir=TMP)
         arg_str = '--gen-keys minion --gen-keys-dir {0}'.format(tempdir)
         try:
             data, error = self.run_key(
                 arg_str + ' --keysize=1024', catch_stderr=True
             )
             self.assertIn(
-                'error: The minimum value for keysize is 2048', '\n'.join(error)
+                'salt-key: error: The minimum value for keysize is 2048', error
             )
 
             data, error = self.run_key(
                 arg_str + ' --keysize=32769', catch_stderr=True
             )
             self.assertIn(
-                'error: The maximum value for keysize is 32768',
-                '\n'.join(error)
+                'salt-key: error: The maximum value for keysize is 32768',
+                error
             )
         finally:
             shutil.rmtree(tempdir)
-
-    def test_issue_7754(self):
-        old_cwd = os.getcwd()
-        config_dir = os.path.join(RUNTIME_VARS.TMP, 'issue-7754')
-        if not os.path.isdir(config_dir):
-            os.makedirs(config_dir)
-
-        os.chdir(config_dir)
-
-        config_file_name = 'master'
-        with salt.utils.files.fopen(self.get_config_file_path(config_file_name), 'r') as fhr:
-            config = salt.utils.yaml.safe_load(fhr)
-            config['log_file'] = 'file:///dev/log/LOG_LOCAL3'
-            with salt.utils.files.fopen(os.path.join(config_dir, config_file_name), 'w') as fhw:
-                salt.utils.yaml.safe_dump(config, fhw, default_flow_style=False)
-        ret = self.run_script(
-            self._call_binary_,
-            '--config-dir {0} -L'.format(
-                config_dir
-            ),
-            timeout=60
-        )
-        try:
-            self.assertIn('minion', '\n'.join(ret))
-            self.assertFalse(os.path.isdir(os.path.join(config_dir, 'file:')))
-        finally:
-            self.chdir(old_cwd)
-            if os.path.isdir(config_dir):
-                shutil.rmtree(config_dir)

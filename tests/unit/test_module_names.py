@@ -116,6 +116,7 @@ class BadTestModuleNamesTestCase(TestCase):
             'unit.test_virtualname',
             'unit.test_simple',
             'unit.test_zypp_plugins',
+            'unit.test_proxy_minion',
             'unit.cache.test_cache',
             'unit.serializers.test_serializers',
             'unit.states.test_postgres',
@@ -132,6 +133,7 @@ class BadTestModuleNamesTestCase(TestCase):
             'integration.loader.test_ext_grains',
             'integration.loader.test_ext_modules',
             'integration.logging.test_jid_logging',
+            'integration.master.test_event_return',
             'integration.minion.test_blackout',
             'integration.minion.test_pillar',
             'integration.minion.test_executor',
@@ -148,6 +150,7 @@ class BadTestModuleNamesTestCase(TestCase):
             'integration.proxy.test_shell',
             'integration.proxy.test_simple',
             'integration.reactor.test_reactor',
+            'integration.returners.test_noop_return',
             'integration.runners.test_runner_returns',
             'integration.scheduler.test_error',
             'integration.scheduler.test_eval',
@@ -155,6 +158,7 @@ class BadTestModuleNamesTestCase(TestCase):
             'integration.scheduler.test_skip',
             'integration.scheduler.test_maxrunning',
             'integration.scheduler.test_helpers',
+            'integration.scheduler.test_run_job',
             'integration.shell.test_spm',
             'integration.shell.test_cp',
             'integration.shell.test_syndic',
@@ -191,6 +195,7 @@ class BadTestModuleNamesTestCase(TestCase):
             'integration.states.test_match',
             'integration.states.test_renderers',
             'integration.wheel.test_client',
+            'multimaster.minion.test_event',
         )
         errors = []
 

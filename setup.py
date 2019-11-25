@@ -124,6 +124,7 @@ SALT_VERSION_HARDCODED = os.path.join(os.path.abspath(SETUP_DIRNAME), 'salt', '_
 SALT_SYSPATHS_HARDCODED = os.path.join(os.path.abspath(SETUP_DIRNAME), 'salt', '_syspaths.py')
 SALT_REQS = os.path.join(os.path.abspath(SETUP_DIRNAME), 'requirements', 'base.txt')
 SALT_ZEROMQ_REQS = os.path.join(os.path.abspath(SETUP_DIRNAME), 'requirements', 'zeromq.txt')
+SALT_RAET_REQS = os.path.join(os.path.abspath(SETUP_DIRNAME), 'requirements', 'raet.txt')
 SALT_WINDOWS_REQS = os.path.join(os.path.abspath(SETUP_DIRNAME), 'pkg', 'windows', 'req.txt')
 SALT_LONG_DESCRIPTION_FILE = os.path.join(os.path.abspath(SETUP_DIRNAME), 'README.rst')
 
@@ -436,7 +437,7 @@ class DownloadWindowsDlls(Command):
         url = 'https://repo.saltstack.com/windows/dependencies/{bits}/{fname}.dll'
         dest = os.path.join(os.path.dirname(sys.executable), '{fname}.dll')
         with indent_log():
-            for fname in ('libeay32', 'ssleay32', 'msvcr120'):
+            for fname in ('libeay32', 'libsodium', 'ssleay32', 'msvcr120'):
                 # See if the library is already on the system
                 if find_library(fname):
                     continue
@@ -775,8 +776,9 @@ class SaltDistribution(distutils.dist.Distribution):
         * salt-call
         * salt-cp
         * salt-minion
+        * salt-syndic
         * salt-unity
-        * salt-proxy
+        * spm
 
     When packaged for salt-ssh, the following scripts should be installed:
         * salt-call
@@ -784,7 +786,8 @@ class SaltDistribution(distutils.dist.Distribution):
         * salt-ssh
         * salt-cloud
 
-        Under windows, the following scripts should be omitted from the salt-ssh package:
+        Under windows, the following scripts should be omitted from the salt-ssh
+        package:
             * salt-cloud
             * salt-run
 
@@ -792,9 +795,8 @@ class SaltDistribution(distutils.dist.Distribution):
     '''
     global_options = distutils.dist.Distribution.global_options + [
         ('ssh-packaging', None, 'Run in SSH packaging mode'),
-        ('salt-transport=', None, 'The transport to prepare salt for. Currently, the only choice '
-                                  'is \'zeromq\'. This may be expanded in the future. Defaults to '
-                                  '\'zeromq\'', 'zeromq')] + [
+        ('salt-transport=', None, 'The transport to prepare salt for. Choices are \'zeromq\' '
+                                  '\'raet\' or \'both\'. Defaults to \'zeromq\'', 'zeromq')] + [
         ('with-salt-version=', None, 'Set a fixed version for Salt instead calculating it'),
         # Salt's Paths Configuration Settings
         ('salt-root-dir=', None,
@@ -978,13 +980,12 @@ class SaltDistribution(distutils.dist.Distribution):
             return data_files
 
         if IS_WINDOWS_PLATFORM:
-            data_files[0][1].extend(['doc/man/salt-api.1',
-                                     'doc/man/salt-cp.1',
+            data_files[0][1].extend(['doc/man/salt-cp.1',
                                      'doc/man/salt-key.1',
-                                     'doc/man/salt-master.1',
                                      'doc/man/salt-minion.1',
-                                     'doc/man/salt-proxy.1',
-                                     'doc/man/salt-unity.1'])
+                                     'doc/man/salt-syndic.1',
+                                     'doc/man/salt-unity.1',
+                                     'doc/man/spm.1'])
             return data_files
 
         # *nix, so, we need all man pages
@@ -1008,10 +1009,18 @@ class SaltDistribution(distutils.dist.Distribution):
 
         if self.salt_transport == 'zeromq':
             install_requires += _parse_requirements_file(SALT_ZEROMQ_REQS)
+        elif self.salt_transport == 'raet':
+            install_requires += _parse_requirements_file(SALT_RAET_REQS)
 
         if IS_WINDOWS_PLATFORM:
             install_requires = _parse_requirements_file(SALT_WINDOWS_REQS)
         return install_requires
+
+    @property
+    def _property_extras_require(self):
+        if self.ssh_packaging:
+            return {}
+        return {'RAET': _parse_requirements_file(SALT_RAET_REQS)}
 
     @property
     def _property_scripts(self):
@@ -1025,14 +1034,12 @@ class SaltDistribution(distutils.dist.Distribution):
             return scripts
 
         if IS_WINDOWS_PLATFORM:
-            scripts.extend(['scripts/salt',
-                            'scripts/salt-api',
-                            'scripts/salt-cp',
+            scripts.extend(['scripts/salt-cp',
                             'scripts/salt-key',
-                            'scripts/salt-master',
                             'scripts/salt-minion',
-                            'scripts/salt-proxy',
-                            'scripts/salt-unity'])
+                            'scripts/salt-syndic',
+                            'scripts/salt-unity',
+                            'scripts/spm'])
             return scripts
 
         # *nix, so, we need all scripts
@@ -1043,11 +1050,10 @@ class SaltDistribution(distutils.dist.Distribution):
                         'scripts/salt-key',
                         'scripts/salt-master',
                         'scripts/salt-minion',
-                        'scripts/salt-support',
+                        'scripts/salt-proxy',
                         'scripts/salt-ssh',
                         'scripts/salt-syndic',
                         'scripts/salt-unity',
-                        'scripts/salt-proxy',
                         'scripts/spm'])
         return scripts
 
@@ -1064,12 +1070,10 @@ class SaltDistribution(distutils.dist.Distribution):
             return {'console_scripts': scripts}
 
         if IS_WINDOWS_PLATFORM:
-            scripts.extend(['salt = salt.scripts:salt_main',
-                            'salt-api = salt.scripts:salt_api',
-                            'salt-cp = salt.scripts:salt_cp',
+            scripts.extend(['salt-cp = salt.scripts:salt_cp',
                             'salt-key = salt.scripts:salt_key',
-                            'salt-master = salt.scripts:salt_master',
                             'salt-minion = salt.scripts:salt_minion',
+                            'salt-syndic = salt.scripts:salt_syndic',
                             'salt-unity = salt.scripts:salt_unity',
                             'spm = salt.scripts:salt_spm'])
             return {'console_scripts': scripts}
@@ -1082,7 +1086,6 @@ class SaltDistribution(distutils.dist.Distribution):
                         'salt-key = salt.scripts:salt_key',
                         'salt-master = salt.scripts:salt_master',
                         'salt-minion = salt.scripts:salt_minion',
-                        'salt-support = salt.scripts:salt_support',
                         'salt-ssh = salt.scripts:salt_ssh',
                         'salt-syndic = salt.scripts:salt_syndic',
                         'salt-unity = salt.scripts:salt_unity',
@@ -1186,7 +1189,15 @@ class SaltDistribution(distutils.dist.Distribution):
                         freezer_includes.append(str(os.path.basename(mod.identifier)))
             except ImportError:
                 pass
-
+            # Include C extension that convinces esky to package up the libsodium C library
+            # This is needed for ctypes to find it in libnacl which is in turn needed for raet
+            # see pkg/smartos/esky/sodium_grabber{.c,_installer.py}
+            freezer_includes.extend([
+                'sodium_grabber',
+                'ioflo',
+                'raet',
+                'libnacl',
+            ])
         return freezer_includes
     # <---- Esky Setup -----------------------------------------------------------------------------------------------
 
@@ -1203,10 +1214,10 @@ class SaltDistribution(distutils.dist.Distribution):
         elif self.salt_transport is None:
             self.salt_transport = 'zeromq'
 
-        if self.salt_transport not in ('zeromq', 'both', 'ssh', 'none'):
+        if self.salt_transport not in ('zeromq', 'raet', 'both', 'ssh', 'none'):
             raise DistutilsArgError(
                 'The value of --salt-transport needs be \'zeromq\', '
-                '\'both\', \'ssh\', or \'none\' not \'{0}\''.format(
+                '\'raet\', \'both\', \'ssh\' or \'none\' not \'{0}\''.format(
                     self.salt_transport
                 )
             )
